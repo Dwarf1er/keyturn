@@ -76,6 +76,15 @@ public sealed class WatcherTests : IDisposable
 
     void UserSaves() { foreach (var s in _vault.Expired()) _vault.Set(s.Definition.Name, "new-value"); }
 
+    /// <summary>A secret that has been without a value for a long time, so the new-secret grace period is long over.</summary>
+    void DefineNeverSet(string name, string schedule)
+    {
+        var now = _clock.Now;
+        _clock.Now = T0.AddHours(-1);
+        _vault.Define(name, schedule);
+        _clock.Now = now;
+    }
+
     [Fact]
     public async Task PromptsExactlyWhenTheSecretExpiresAndNotBefore()
     {
@@ -94,18 +103,37 @@ public sealed class WatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task ASecretThatWasNeverSetPromptsImmediately()
+    public async Task ASecretLeftWithoutAValueForLongPromptsImmediately()
     {
-        _vault.Define("vpn", "1d");
+        DefineNeverSet("vpn", "1d");
         _prompt.OnOpen = () => { UserSaves(); return 0; };
         await RunUntil(TimeSpan.FromHours(1));
         Assert.Equal([T0], _prompt.Opened);
     }
 
     [Fact]
+    public async Task ANewSecretWithoutAValueIsLeftAloneForTenMinutesThenPrompted()
+    {
+        _vault.Define("vpn", "1d"); // just created, no value yet
+        _prompt.OnOpen = () => { UserSaves(); return 0; };
+        await RunUntil(TimeSpan.FromHours(1));
+        Assert.Equal([T0.AddMinutes(10)], _prompt.Opened);
+    }
+
+    [Fact]
+    public async Task SettingTheValueRightAfterCreatingItNeverPrompts()
+    {
+        // `keyturn add vpn 1d` then a minute later `keyturn set vpn`: exactly the flow that used to pop up in the way.
+        _vault.Define("vpn", "1d");
+        _clock.At(T0.AddMinutes(1), () => _vault.Set("vpn", "pw"));
+        await RunUntil(TimeSpan.FromHours(2));
+        Assert.Empty(_prompt.Opened);
+    }
+
+    [Fact]
     public async Task DismissedSecretIsLeftAloneForTenMinutesThenAskedAgain()
     {
-        _vault.Define("vpn", "1d"); // never set, so due at once
+        DefineNeverSet("vpn", "1d"); // no value, so due at once
         await RunUntil(TimeSpan.FromHours(1), alsoStopWhen: () => _prompt.Opened.Count >= 3);
         Assert.Equal([T0, T0.AddMinutes(10), T0.AddMinutes(20)], _prompt.Opened);
     }
@@ -113,7 +141,7 @@ public sealed class WatcherTests : IDisposable
     [Fact]
     public async Task SavingMeansNoSnoozeAndTheNextExpiryPromptsAgain()
     {
-        _vault.Define("vpn", "1h");
+        DefineNeverSet("vpn", "1h");
         _prompt.OnOpen = () => { UserSaves(); return 0; };
         await RunUntil(TimeSpan.FromHours(2.5));
         Assert.Equal([T0, T0.AddHours(1), T0.AddHours(2)], _prompt.Opened);
@@ -133,7 +161,7 @@ public sealed class WatcherTests : IDisposable
     [Fact]
     public async Task APromptThatFailsToOpenIsRetriedAfterThirtySeconds()
     {
-        _vault.Define("vpn", "1d");
+        DefineNeverSet("vpn", "1d");
         _prompt.OnOpen = () => 1; // e.g. no display yet at login
         await RunUntil(TimeSpan.FromMinutes(5), alsoStopWhen: () => _prompt.Opened.Count >= 3);
         Assert.Equal([T0, T0.AddSeconds(30), T0.AddSeconds(60)], _prompt.Opened);
@@ -142,7 +170,7 @@ public sealed class WatcherTests : IDisposable
     [Fact]
     public async Task APromptRunnerThatThrowsIsTreatedAsAFailureNotACrash()
     {
-        _vault.Define("vpn", "1d");
+        DefineNeverSet("vpn", "1d");
         var thrower = new ThrowingPrompt();
         var watcher = new Watcher(_vault, _snooze, thrower, null, () => _clock.Now, _clock.Delay, () => thrower.Calls >= 2, _log.Add);
         await watcher.RunAsync(CancellationToken.None);
@@ -159,7 +187,7 @@ public sealed class WatcherTests : IDisposable
     [Fact]
     public async Task ASecretBeingRefreshedByAToolIsNotPromptedTwice()
     {
-        _vault.Define("vpn", "1d"); // due
+        DefineNeverSet("vpn", "1d"); // due
         using var toolsWindow = RefreshLock.TryAcquire(_vault.RefreshLockPath("vpn"), TimeSpan.Zero)!; // `keyturn get --refresh` is asking
         await RunUntil(TimeSpan.FromHours(1));
         Assert.Empty(_prompt.Opened);
@@ -168,7 +196,7 @@ public sealed class WatcherTests : IDisposable
     [Fact]
     public async Task OnlyTheSecretsItIsNotBusyWithAreSnoozed()
     {
-        _vault.Define("a", "1d"); _vault.Define("b", "1d");
+        DefineNeverSet("a", "1d"); DefineNeverSet("b", "1d");
         using var toolsWindow = RefreshLock.TryAcquire(_vault.RefreshLockPath("b"), TimeSpan.Zero)!;
         await RunUntil(TimeSpan.FromMinutes(1), alsoStopWhen: () => _prompt.Opened.Count >= 1);
         Assert.False(_snooze.IsSnoozed(_vault.Find("b")!));   // b belongs to the tool's window
@@ -197,7 +225,7 @@ public sealed class WatcherTests : IDisposable
     [Fact]
     public async Task ADamagedSecretsFileDoesNotKillTheWatcherAndItRecovers()
     {
-        _vault.Define("vpn", "1d");
+        DefineNeverSet("vpn", "1d");
         var path = Path.Combine(_dir, "secrets.json");
         var good = File.ReadAllText(path);
         File.WriteAllText(path, "{ this is not json");
@@ -329,6 +357,87 @@ public sealed class SnoozeStoreTests : IDisposable
         var store = new SnoozeStore(blocked, () => _now);
         store.Snooze(Def(), TimeSpan.FromMinutes(10)); // must not throw
         Assert.True(store.IsSnoozed(Def()));          // and must not turn into a re-prompt loop
+    }
+}
+
+public sealed class NewSecretGraceTests : IDisposable
+{
+    static readonly DateTimeOffset T0 = DateTimeOffset.Parse("2026-01-01T10:00:00+00:00");
+    readonly string _dir = Directory.CreateTempSubdirectory("keyturn-grace").FullName;
+    DateTimeOffset _now = T0;
+    public void Dispose() => Directory.Delete(_dir, recursive: true);
+
+    SnoozeStore Store() => new(_dir, () => _now);
+    static SecretDefinition Def(DateTimeOffset? created, DateTimeOffset? setAt = null) =>
+        new() { Name = "vpn", Schedule = "1d", CreatedAt = created, LastSetAt = setAt };
+
+    [Fact]
+    public void ANewSecretWithoutAValueIsHeldBackForTenMinutes()
+    {
+        var store = Store();
+        Assert.Equal(T0.AddMinutes(10), store.SnoozedUntil(Def(T0)));
+        _now = T0.AddMinutes(9.99);
+        Assert.True(store.IsSnoozed(Def(T0)));
+        _now = T0.AddMinutes(10);
+        Assert.False(store.IsSnoozed(Def(T0))); // and from then on it prompts like any other
+    }
+
+    [Fact]
+    public void ItNeverAppliesOnceTheSecretHasAValue() =>
+        Assert.False(Store().IsSnoozed(Def(T0, setAt: T0)));
+
+    [Fact]
+    public void SecretsFromEarlierVersionsGetNoGrace() =>
+        Assert.False(Store().IsSnoozed(Def(created: null)));
+
+    [Fact]
+    public void ASecretLeftWithoutAValueForLongGetsNoGrace()
+    {
+        _now = T0.AddDays(3);
+        Assert.False(Store().IsSnoozed(Def(T0)));
+    }
+
+    [Fact]
+    public void WhenBothApplyTheLaterEndWins()
+    {
+        var store = Store();
+        _now = T0.AddMinutes(5);
+        store.Snooze(Def(T0), TimeSpan.FromMinutes(10)); // dismissed at +5m: until +15m, past the grace end of +10m
+        Assert.Equal(T0.AddMinutes(15), store.SnoozedUntil(Def(T0)));
+    }
+}
+
+public sealed class VaultCreationTests : IDisposable
+{
+    sealed class NullBackend : ISecretBackend
+    {
+        public string? Get(string name) => null;
+        public void Set(string name, string value) { }
+        public void Remove(string name) { }
+    }
+
+    static readonly DateTimeOffset T0 = DateTimeOffset.Parse("2026-01-01T10:00:00+00:00");
+    readonly string _dir = Directory.CreateTempSubdirectory("keyturn-created").FullName;
+    DateTimeOffset _now = T0;
+    public void Dispose() => Directory.Delete(_dir, recursive: true);
+    SecretVault Vault() => new(new NullBackend(), Path.Combine(_dir, "secrets.json"), () => _now);
+
+    [Fact]
+    public void DefiningRecordsWhenItWasCreatedAndRedefiningKeepsIt()
+    {
+        var v = Vault();
+        Assert.Equal(T0, v.Define("vpn", "1d").CreatedAt);
+        _now = T0.AddDays(1);
+        Assert.Equal(T0, v.Define("vpn", "12h", "changed").CreatedAt); // editing the schedule isn't creating it again
+    }
+
+    [Fact]
+    public void FilesWrittenByEarlierVersionsStillLoad()
+    {
+        File.WriteAllText(Path.Combine(_dir, "secrets.json"), "[ { \"Name\": \"old\", \"Schedule\": \"1d\" } ]");
+        var def = Vault().Find("old")!;
+        Assert.Null(def.CreatedAt);
+        Assert.Null(def.LastSetAt);
     }
 }
 

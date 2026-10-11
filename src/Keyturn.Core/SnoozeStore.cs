@@ -16,6 +16,9 @@ public sealed class SnoozeStore
 {
     public const string FileName = "snooze.json";
 
+    /// <summary>How long a brand-new secret that has no value yet is left alone: you are almost certainly about to set it.</summary>
+    public static readonly TimeSpan NewSecretGrace = TimeSpan.FromMinutes(10);
+
     readonly string _path;
     readonly Func<DateTimeOffset> _now;
     readonly Dictionary<string, SnoozeEntry> _memory = new(StringComparer.OrdinalIgnoreCase); // survives a failing disk
@@ -28,10 +31,27 @@ public sealed class SnoozeStore
 
     public bool IsSnoozed(SecretDefinition definition) => SnoozedUntil(definition) is not null;
 
-    public DateTimeOffset? SnoozedUntil(SecretDefinition definition) =>
-        Entries().TryGetValue(definition.Name, out var entry) && entry.Until > _now() && entry.SetAt == definition.LastSetAt
-            ? entry.Until
-            : null;
+    /// <summary>
+    /// Until when this secret should not be prompted for, or null if it should be prompted for now. Two reasons: it was
+    /// dismissed ("Later"), or it is new and still has no value (see <see cref="NewSecretGrace"/>).
+    /// </summary>
+    public DateTimeOffset? SnoozedUntil(SecretDefinition definition)
+    {
+        var now = _now();
+        DateTimeOffset? until = null;
+
+        if (Entries().TryGetValue(definition.Name, out var entry) && entry.Until > now && entry.SetAt == definition.LastSetAt)
+            until = entry.Until;
+
+        // Only while it has no value: once it is set, the schedule decides, and a secret left without a value long after
+        // it was created prompts as normal.
+        if (definition.LastSetAt is null && definition.CreatedAt is { } created && created + NewSecretGrace > now)
+        {
+            var graceEnds = created + NewSecretGrace;
+            if (until is null || graceEnds > until) until = graceEnds;
+        }
+        return until;
+    }
 
     public void Snooze(SecretDefinition definition, TimeSpan duration)
     {

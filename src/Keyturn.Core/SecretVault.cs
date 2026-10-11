@@ -76,7 +76,7 @@ public sealed class SecretVault
 
         var all = Load();
         var existing = all.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        var def = (existing ?? new SecretDefinition { Name = name, Schedule = schedule }) with
+        var def = (existing ?? new SecretDefinition { Name = name, Schedule = schedule, CreatedAt = _now() }) with
         {
             Schedule = schedule,
             Description = description ?? existing?.Description,

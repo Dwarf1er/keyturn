@@ -203,6 +203,14 @@ public sealed class WatchCliTests : IDisposable
     }
 
     [Fact]
+    public void StatusListsANewSecretStillInItsGracePeriodAsSnoozed()
+    {
+        Vault().Define("fresh-and-empty", "1d"); // created "now" in the fake clock, no value
+        var text = Run("watch", "status").Out;
+        Assert.Contains("snoozed:   fresh-and-empty until", text);
+    }
+
+    [Fact]
     public void StatusJsonHasAStableShape()
     {
         var v = Vault();

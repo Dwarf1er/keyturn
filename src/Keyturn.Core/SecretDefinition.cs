@@ -8,6 +8,12 @@ public sealed record SecretDefinition
     public string? Description { get; init; }
     public DateTimeOffset? LastSetAt { get; init; }
 
+    /// <summary>
+    /// When the secret was defined. Lets the watcher give a brand-new secret that has no value yet a short grace period
+    /// before prompting for it. Null for secrets defined by earlier versions, which therefore get no grace.
+    /// </summary>
+    public DateTimeOffset? CreatedAt { get; init; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     public Schedule ParsedSchedule => Keyturn.Schedule.Parse(Schedule);
 

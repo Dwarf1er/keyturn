@@ -177,7 +177,7 @@ public sealed class KeyturnCli(
     {
         var usage = "add <name> <schedule> [description]";
         var def = vault.Define(a.Positional(0, usage), a.Positional(1, usage), a.Count > 2 ? string.Join(' ', a.Rest(2)) : null);
-        io.Err.WriteLine($"Defined '{def.Name}' (rotates {def.Schedule}). Set a value with: keyturn set {def.Name}");
+        io.Err.WriteLine($"Defined '{def.Name}' (rotates {def.Schedule}). Set a value with: keyturn set {def.Name} (Keyturn waits 10 minutes before prompting for a secret that has none yet)");
         WarnIfNotWatching();
         return Ok;
     }
@@ -355,7 +355,13 @@ public sealed class KeyturnCli(
         var running = WatchControl.IsRunning(ConfigDirectory);
         var installed = _autostart.IsInstalled();
         var next = vault.NextToExpire();
-        var snoozed = new SnoozeStore(ConfigDirectory, _now).Active();
+        var store = new SnoozeStore(ConfigDirectory, _now);
+        var snoozed = vault.List()
+            .Select(d => (d.Name, Until: store.SnoozedUntil(d)))
+            .Where(x => x.Until is not null)
+            .Select(x => (x.Name, Until: x.Until!.Value))
+            .OrderBy(x => x.Until)
+            .ToList();
         var log = new WatchLog(ConfigDirectory);
 
         if (json)

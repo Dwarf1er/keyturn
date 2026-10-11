@@ -388,7 +388,8 @@ public sealed class MainWindow : Window
         return grid;
     }
 
-    TextBox ValueField(SecretStatus s, string placeholder)
+    /// <summary>A masked input with a show/hide toggle, used for every secret value.</summary>
+    static TextBox PasswordBox(string placeholder)
     {
         var box = new TextBox { Classes = { "field" }, PasswordChar = '•', Watermark = placeholder };
         var reveal = new ToggleButton { Classes = { "icon-btn" }, Content = Icons.Create(Icons.Eye, 17) };
@@ -398,6 +399,12 @@ public sealed class MainWindow : Window
             reveal.Content = Icons.Create(box.RevealPassword ? Icons.EyeOff : Icons.Eye, 17);
         };
         box.InnerRightContent = reveal;
+        return box;
+    }
+
+    TextBox ValueField(SecretStatus s, string placeholder)
+    {
+        var box = PasswordBox(placeholder);
         box.KeyDown += (_, e) => { if (e.Key == Key.Enter && !_manage) SavePrompt(); };
         _values[s.Definition.Name] = box;
         return box;
@@ -412,6 +419,7 @@ public sealed class MainWindow : Window
         var name = new TextBox { Classes = { "field" }, Watermark = "e.g. vpn-password", MaxLength = 64 };
         var description = new TextBox { Classes = { "field" }, Watermark = "What is this for? (optional)" };
         var schedule = new SchedulePicker();
+        var value = PasswordBox("Optional: set it now");
         var message = new TextBlock { Classes = { "error" }, IsVisible = false, TextWrapping = TextWrapping.Wrap };
 
         var cancel = new Button { Classes = { "btn", "ghost", "sm" }, Content = "Cancel" };
@@ -421,13 +429,16 @@ public sealed class MainWindow : Window
         {
             try
             {
-                _vault.Define(name.Text?.Trim() ?? "", schedule.Value, string.IsNullOrWhiteSpace(description.Text) ? null : description.Text.Trim());
+                var def = _vault.Define(name.Text?.Trim() ?? "", schedule.Value, string.IsNullOrWhiteSpace(description.Text) ? null : description.Text.Trim());
+                // Setting it here means it is never "missing", so nothing has to prompt for it.
+                if (!string.IsNullOrEmpty(value.Text)) _vault.Set(def.Name, value.Text);
                 _newPanel!.IsVisible = false;
                 Rebuild();
             }
-            catch (Exception ex) when (ex is ArgumentException or FormatException)
+            catch (Exception ex)
             {
-                message.Text = ex.Message;
+                // The secret may exist already (the value is what failed); creating again just retries the value.
+                message.Text = ex.InnerException is { } inner ? $"{ex.Message} ({inner.Message})" : ex.Message;
                 message.IsVisible = true;
             }
         };
@@ -441,7 +452,13 @@ public sealed class MainWindow : Window
                 Children =
                 {
                     new TextBlock { Text = "New secret", Classes = { "name" } },
-                    Field("Name", name), Field("Description", description), Field("Rotation", schedule), message,
+                    Field("Name", name), Field("Description", description), Field("Rotation", schedule),
+                    Field("Value", new StackPanel
+                    {
+                        Spacing = 6,
+                        Children = { value, new TextBlock { Text = "You can set it later. Keyturn waits 10 minutes before asking for a secret that has none.", Classes = { "muted", "small" }, TextWrapping = TextWrapping.Wrap } },
+                    }),
+                    message,
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, create } },
                 },
             },

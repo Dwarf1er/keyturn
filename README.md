@@ -134,7 +134,7 @@ keyturn add vpn daily@06:00 "Corporate VPN password"
 ```
 
 **2. Give it a value.** Either run `keyturn set vpn` (hidden prompt, or pipe the value in on stdin), or let the
-prompt window ask you.
+prompt window ask you. Keyturn waits ten minutes before prompting for a new secret that has no value yet.
 
 **3. Make sure the watcher is running**, so a prompt appears the moment a secret expires:
 
@@ -259,6 +259,9 @@ How the prompt behaves:
   closes itself when nothing is left.
 * **Later means in 10 minutes.** Closing the window without saving leaves the secret alone for ten minutes, then asks
   again. Setting a new value cancels the wait, so a freshly rotated secret that expires soon is never missed.
+* **New secrets get ten minutes.** A secret you've just created and haven't given a value yet isn't prompted for until
+  ten minutes after you created it, since you're almost certainly about to set it (`keyturn set`, or the Value field
+  when you create it in the window). One that has gone without a value for longer prompts as normal.
 * **No stacking.** There is one prompt at a time, and if a tool's `get --refresh` is already asking for a secret, the
   watcher doesn't open a second window for it.
 * **On top, as far as the OS allows.** The window opens above other windows, but the OS may keep keyboard focus in
