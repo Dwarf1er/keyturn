@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Keyturn.App/Keyturn.App.csproj" />
+    <Project Path="src/Keyturn.Cli/Keyturn.Cli.csproj" />
+    <Project Path="src/Keyturn.Core/Keyturn.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Keyturn.Tests/Keyturn.Tests.csproj" />
+  </Folder>
+</Solution>

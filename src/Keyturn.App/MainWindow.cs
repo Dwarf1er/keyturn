@@ -1,0 +1,418 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Shapes;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+
+namespace Keyturn.App;
+
+/// <summary>
+/// Prompt mode: only secrets that need a new value, one Save for all of them.
+/// Manage mode: every secret with its schedule, plus create/remove, each card saving on its own.
+/// </summary>
+public sealed class MainWindow : Window
+{
+    readonly SecretVault _vault;
+    readonly bool _manage;
+    readonly string? _only;
+    readonly StackPanel _cards = new() { Spacing = 12 };
+    readonly TextBlock _subtitle = new() { Classes = { "muted" } };
+    readonly TextBlock _error = new() { Classes = { "error" }, TextWrapping = TextWrapping.Wrap, IsVisible = false };
+    readonly Dictionary<string, TextBox> _values = new();
+    readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
+    bool _expandedInitialised;
+    Border? _newPanel;
+    Button? _saveAll;
+
+    public MainWindow(SecretVault vault, bool manage, string? only = null)
+    {
+        _vault = vault;
+        _manage = manage;
+        _only = only;
+
+        Title = manage ? "Keyturn" : "Keyturn: secrets due";
+        Width = manage ? 600 : 480;
+        MaxHeight = 780;
+        SizeToContent = SizeToContent.Height;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Topmost = !manage; // a scheduled prompt should be seen, not buried
+        CanResize = false;
+        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+
+        var root = new DockPanel { Margin = new Thickness(24) };
+
+        var header = BuildHeader();
+        DockPanel.SetDock(header, Dock.Top);
+        root.Children.Add(header);
+
+        if (!manage)
+        {
+            var footer = BuildPromptFooter();
+            DockPanel.SetDock(footer, Dock.Bottom);
+            root.Children.Add(footer);
+        }
+
+        DockPanel.SetDock(_error, Dock.Bottom);
+        _error.Margin = new Thickness(0, 12, 0, 0);
+        root.Children.Add(_error);
+
+        root.Children.Add(new ScrollViewer
+        {
+            Content = _cards,
+            Margin = new Thickness(0, 20, 0, 0),
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            Padding = new Thickness(0, 0, 0, 2),
+        });
+
+        Content = root;
+        Rebuild();
+    }
+
+    // ---- chrome ----------------------------------------------------------------------------
+
+    Control BuildHeader()
+    {
+        var titleBlock = new StackPanel
+        {
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { new TextBlock { Text = _manage ? "Keyturn" : "Refresh your secrets", Classes = { "title" } }, _subtitle },
+        };
+        var logo = new Border { Classes = { "logo" }, Child = Icons.Create(Icons.Key, 22, "white") };
+        logo.Child!.HorizontalAlignment = HorizontalAlignment.Center;
+        logo.Child.VerticalAlignment = VerticalAlignment.Center;
+
+        var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, Children = { logo, titleBlock } };
+        if (!_manage) return left;
+
+        var add = new Button
+        {
+            Classes = { "btn", "primary", "sm" },
+            Content = Row(Icons.Create(Icons.Plus, 15, "white"), new TextBlock { Text = "New secret", VerticalAlignment = VerticalAlignment.Center }),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        add.Click += (_, _) => ToggleNewPanel();
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        grid.Children.Add(left);
+        Grid.SetColumn(add, 1);
+        grid.Children.Add(add);
+        return grid;
+    }
+
+    Control BuildPromptFooter()
+    {
+        _saveAll = new Button { Classes = { "btn", "primary" }, MinWidth = 96, Content = "Save", IsDefault = true };
+        _saveAll.Click += (_, _) => SavePrompt();
+        var later = new Button { Classes = { "btn", "ghost" }, Content = "Later" };
+        later.Click += (_, _) => Close();
+
+        var note = Row(Icons.Create(Icons.Lock, 14), new TextBlock { Text = "Stored in your system keychain", Classes = { "muted", "small" }, VerticalAlignment = VerticalAlignment.Center });
+        note.VerticalAlignment = VerticalAlignment.Center;
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { later, _saveAll } };
+        var grid = new Grid { Margin = new Thickness(0, 20, 0, 0), ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        grid.Children.Add(note);
+        Grid.SetColumn(buttons, 1);
+        grid.Children.Add(buttons);
+        return grid;
+    }
+
+    // ---- content ---------------------------------------------------------------------------
+
+    void Rebuild()
+    {
+        _cards.Children.Clear();
+        _values.Clear();
+        _error.IsVisible = false;
+
+        var all = _vault.Statuses();
+        var shown = all
+            .Where(s => _manage || s.NeedsAttention)
+            .Where(s => _manage || _only is null || s.Definition.Name.Equals(_only, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var due = all.Count(s => s.NeedsAttention);
+
+        _subtitle.Text = _manage
+            ? (all.Count == 0 ? "Rotating secrets in your system keychain" : $"{Humanize.Count(all.Count, "secret", "secrets")} · {(due == 0 ? "all up to date" : $"{due} need{(due == 1 ? "s" : "")} attention")}")
+            : $"{Humanize.Count(shown.Count, "secret needs", "secrets need")} a new value";
+
+        if (_manage && _newPanel is not null) _cards.Children.Add(_newPanel);
+        if (shown.Count == 0 && _newPanel is not { IsVisible: true }) _cards.Children.Add(EmptyState());
+        if (_manage && !_expandedInitialised)
+        {
+            // Open the first thing that needs attention so the window never starts as a wall of collapsed rows.
+            _expandedInitialised = true;
+            if (shown.FirstOrDefault(x => x.NeedsAttention) is { } first) _expanded.Add(first.Definition.Name);
+        }
+        foreach (var s in shown) _cards.Children.Add(_manage ? ManageCard(s) : PromptCard(s));
+
+        Dispatcher.UIThread.Post(() => _values.Values.FirstOrDefault()?.Focus());
+    }
+
+    Control EmptyState()
+    {
+        var icon = new Border
+        {
+            Width = 52, Height = 52, CornerRadius = new CornerRadius(14), HorizontalAlignment = HorizontalAlignment.Center,
+            Classes = { "seg-track" }, Child = Icons.Create(Icons.Shield, 24, "text"),
+        };
+        icon.Child!.HorizontalAlignment = HorizontalAlignment.Center;
+        icon.Child.VerticalAlignment = VerticalAlignment.Center;
+        return new StackPanel
+        {
+            Spacing = 6, Margin = new Thickness(0, 28),
+            Children =
+            {
+                icon,
+                new TextBlock { Text = "No secrets yet", Classes = { "name" }, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0) },
+                new TextBlock { Text = "Add one and Keyturn will ask for a new value whenever it expires.", Classes = { "muted" }, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap },
+            },
+        };
+    }
+
+    Border PromptCard(SecretStatus s)
+    {
+        var stack = new StackPanel { Spacing = 12 };
+        stack.Children.Add(NameLine(s));
+        if (!string.IsNullOrWhiteSpace(s.Definition.Description))
+            stack.Children.Add(new TextBlock { Text = s.Definition.Description, Classes = { "muted" }, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, -6, 0, 0) });
+        stack.Children.Add(ValueField(s, "Enter new value"));
+        stack.Children.Add(Row(Icons.Create(Icons.Clock, 14), new TextBlock { Text = Humanize.Schedule(s.Definition.ParsedSchedule), Classes = { "muted", "small" }, VerticalAlignment = VerticalAlignment.Center }));
+        return new Border { Classes = { "card" }, Child = stack };
+    }
+
+    Border ManageCard(SecretStatus s)
+    {
+        var name = s.Definition.Name;
+        var schedule = new SchedulePicker();
+        schedule.Load(s.Definition.Schedule);
+        var value = ValueField(s, s.State == SecretState.Fresh ? "Enter a new value to rotate early" : "Enter new value");
+
+        var save = new Button { Classes = { "btn", "primary", "sm" }, Content = "Save changes", MinWidth = 110 };
+        save.Click += async (_, _) =>
+        {
+            if (!Try(() =>
+            {
+                if (schedule.Value != s.Definition.Schedule) _vault.Define(name, schedule.Value);
+                if (_values[name].Text is { Length: > 0 } v) _vault.Set(name, v);
+            })) return;
+            await Flash(save, "Saved");
+            Rebuild();
+        };
+
+        var remove = new Button { Classes = { "btn", "danger", "sm" } };
+        void ResetRemove() { remove.Content = Row(Icons.Create(Icons.Trash, 15, "danger"), new TextBlock { Text = "Remove", VerticalAlignment = VerticalAlignment.Center }); }
+        ResetRemove();
+        remove.Click += async (_, _) =>
+        {
+            // Two-step confirm without a modal: the button asks once, then reverts if ignored.
+            if (remove.Tag is not true)
+            {
+                remove.Tag = true;
+                remove.Content = "Click again to confirm";
+                await Task.Delay(3000);
+                if (remove.Tag is true) { remove.Tag = null; ResetRemove(); }
+                return;
+            }
+            if (Try(() => _vault.Remove(name))) Rebuild();
+        };
+
+        var actions = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        actions.Children.Add(remove);
+        Grid.SetColumn(save, 2);
+        actions.Children.Add(save);
+
+        var details = new StackPanel
+        {
+            Spacing = 16,
+            Margin = new Thickness(0, 16, 0, 0),
+            IsVisible = _expanded.Contains(name),
+            Children =
+            {
+                Field("Value", value),
+                Field("Rotation", schedule),
+                new Border { Classes = { "divider" } },
+                actions,
+            },
+        };
+
+        var chevron = new Border { Child = Icons.Create(_expanded.Contains(name) ? Icons.ChevronUp : Icons.ChevronDown, 18), VerticalAlignment = VerticalAlignment.Center };
+        var summary = new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                new TextBlock { Text = name, Classes = { "name" } },
+                Row(Icons.Create(Icons.Clock, 13),
+                    new TextBlock
+                    {
+                        Text = string.IsNullOrWhiteSpace(s.Definition.Description)
+                            ? Humanize.Schedule(s.Definition.ParsedSchedule)
+                            : $"{Humanize.Schedule(s.Definition.ParsedSchedule)} · {s.Definition.Description}",
+                        Classes = { "muted", "small" },
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        MaxWidth = 330,
+                    }),
+            },
+        };
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand) };
+        header.Children.Add(summary);
+        var pill = StatusPill(s);
+        pill.Margin = new Thickness(0, 0, 12, 0);
+        Grid.SetColumn(pill, 1);
+        header.Children.Add(pill);
+        Grid.SetColumn(chevron, 2);
+        header.Children.Add(chevron);
+        header.PointerPressed += (_, _) =>
+        {
+            var open = !details.IsVisible;
+            details.IsVisible = open;
+            chevron.Child = Icons.Create(open ? Icons.ChevronUp : Icons.ChevronDown, 18);
+            if (open) _expanded.Add(name); else _expanded.Remove(name);
+            if (open) Dispatcher.UIThread.Post(() => value.Focus());
+        };
+
+        return new Border { Classes = { "card" }, Child = new StackPanel { Children = { header, details } } };
+    }
+
+    static Border StatusPill(SecretStatus s) => new()
+    {
+        Classes = { "pill", s.State switch { SecretState.Missing => "warn", SecretState.Stale => "bad", _ => "ok" } },
+        Child = Row(new Ellipse { Classes = { "dot" } }, new TextBlock { Text = Humanize.Status(s, DateTimeOffset.Now), VerticalAlignment = VerticalAlignment.Center }),
+    };
+
+    Control NameLine(SecretStatus s)
+    {
+        var pill = StatusPill(s);
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        grid.Children.Add(new TextBlock { Text = s.Definition.Name, Classes = { "name" }, VerticalAlignment = VerticalAlignment.Center });
+        Grid.SetColumn(pill, 1);
+        grid.Children.Add(pill);
+        return grid;
+    }
+
+    TextBox ValueField(SecretStatus s, string placeholder)
+    {
+        var box = new TextBox { Classes = { "field" }, PasswordChar = '•', Watermark = placeholder };
+        var reveal = new ToggleButton { Classes = { "icon-btn" }, Content = Icons.Create(Icons.Eye, 17) };
+        reveal.IsCheckedChanged += (_, _) =>
+        {
+            box.RevealPassword = reveal.IsChecked == true;
+            reveal.Content = Icons.Create(box.RevealPassword ? Icons.EyeOff : Icons.Eye, 17);
+        };
+        box.InnerRightContent = reveal;
+        box.KeyDown += (_, e) => { if (e.Key == Key.Enter && !_manage) SavePrompt(); };
+        _values[s.Definition.Name] = box;
+        return box;
+    }
+
+    // ---- new secret ------------------------------------------------------------------------
+
+    void ToggleNewPanel()
+    {
+        if (_newPanel is { IsVisible: true }) { _newPanel.IsVisible = false; Rebuild(); return; }
+
+        var name = new TextBox { Classes = { "field" }, Watermark = "e.g. vpn-password", MaxLength = 64 };
+        var description = new TextBox { Classes = { "field" }, Watermark = "What is this for? (optional)" };
+        var schedule = new SchedulePicker();
+        var message = new TextBlock { Classes = { "error" }, IsVisible = false, TextWrapping = TextWrapping.Wrap };
+
+        var cancel = new Button { Classes = { "btn", "ghost", "sm" }, Content = "Cancel" };
+        var create = new Button { Classes = { "btn", "primary", "sm" }, Content = "Create secret", MinWidth = 110 };
+        cancel.Click += (_, _) => { _newPanel!.IsVisible = false; Rebuild(); };
+        create.Click += (_, _) =>
+        {
+            try
+            {
+                _vault.Define(name.Text?.Trim() ?? "", schedule.Value, string.IsNullOrWhiteSpace(description.Text) ? null : description.Text.Trim());
+                _newPanel!.IsVisible = false;
+                Rebuild();
+            }
+            catch (Exception ex) when (ex is ArgumentException or FormatException)
+            {
+                message.Text = ex.Message;
+                message.IsVisible = true;
+            }
+        };
+
+        _newPanel = new Border
+        {
+            Classes = { "card" },
+            Child = new StackPanel
+            {
+                Spacing = 16,
+                Children =
+                {
+                    new TextBlock { Text = "New secret", Classes = { "name" } },
+                    Field("Name", name), Field("Description", description), Field("Rotation", schedule), message,
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, create } },
+                },
+            },
+        };
+        Rebuild();
+        Dispatcher.UIThread.Post(() => name.Focus());
+    }
+
+    // ---- actions ---------------------------------------------------------------------------
+
+    async void SavePrompt()
+    {
+        var entered = _values.Where(kv => !string.IsNullOrEmpty(kv.Value.Text)).ToList();
+        if (entered.Count == 0)
+        {
+            ShowError("Enter a new value for at least one secret, or choose Later.");
+            return;
+        }
+        if (!Try(() => { foreach (var (name, box) in entered) { _vault.Set(name, box.Text!); box.Text = ""; } })) return;
+
+        await Flash(_saveAll!, "Saved");
+        Close();
+    }
+
+    /// <summary>Briefly turns a button green with a checkmark so saving feels acknowledged.</summary>
+    static async Task Flash(Button button, string text)
+    {
+        button.IsEnabled = false;
+        button.Classes.Add("done");
+        button.Content = Row(Icons.Create(Icons.Check, 16, "white"), new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
+        await Task.Delay(750);
+    }
+
+    bool Try(Action action)
+    {
+        try
+        {
+            _error.IsVisible = false;
+            action();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex.InnerException is { } inner ? $"{ex.Message} ({inner.Message})" : ex.Message);
+            return false;
+        }
+    }
+
+    void ShowError(string message)
+    {
+        _error.Text = message;
+        _error.IsVisible = true;
+    }
+
+    // ---- layout helpers --------------------------------------------------------------------
+
+    static StackPanel Row(params Control[] children)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+        foreach (var c in children) { c.VerticalAlignment = VerticalAlignment.Center; row.Children.Add(c); }
+        return row;
+    }
+
+    static StackPanel Field(string label, Control input) =>
+        new() { Spacing = 6, Children = { new TextBlock { Text = label, Classes = { "label" } }, input } };
+}
