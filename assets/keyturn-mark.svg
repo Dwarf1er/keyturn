@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256" role="img" aria-label="Keyturn">
+  <title>Keyturn</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1B1B26"/><stop offset="1" stop-color="#09090E"/></linearGradient>
+    <radialGradient id="glow" cx="32" cy="30" r="30" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7C5CFF" stop-opacity="0.30"/><stop offset="1" stop-color="#7C5CFF" stop-opacity="0"/></radialGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#B4B4C8"/></linearGradient>
+    <linearGradient id="h0" gradientUnits="userSpaceOnUse" x1="32.00" y1="12.00" x2="42.46" y2="19.60"><stop offset="0" stop-color="#3DD68C"/><stop offset="1" stop-color="#4FC3F7"/></linearGradient><linearGradient id="h1" gradientUnits="userSpaceOnUse" x1="42.46" y1="19.60" x2="38.47" y2="31.90"><stop offset="0" stop-color="#4FC3F7"/><stop offset="1" stop-color="#8B6CFF"/></linearGradient><linearGradient id="h2" gradientUnits="userSpaceOnUse" x1="38.47" y1="31.90" x2="25.53" y2="31.90"><stop offset="0" stop-color="#8B6CFF"/><stop offset="1" stop-color="#FF5D8F"/></linearGradient><linearGradient id="h3" gradientUnits="userSpaceOnUse" x1="25.53" y1="31.90" x2="21.54" y2="19.60"><stop offset="0" stop-color="#FF5D8F"/><stop offset="1" stop-color="#FFC53D"/></linearGradient><linearGradient id="h4" gradientUnits="userSpaceOnUse" x1="21.54" y1="19.60" x2="32.00" y2="12.00"><stop offset="0" stop-color="#FFC53D"/><stop offset="1" stop-color="#3DD68C"/></linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#tile)"/>
+  <rect width="64" height="64" rx="15" fill="url(#glow)"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="14.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.10"/>
+  <g transform="translate(32 32) rotate(32) scale(0.93) translate(-32.0 -33.50)">
+    <path d="M 29.00 32.00 L 35.00 32.00 L 35.00 43.5 L 40.00 43.5 L 40.00 48.2 L 35.00 48.2 L 35.00 50.6 L 38.40 50.6 L 38.40 54.4 L 35.00 54.4 L 35.00 58.00 L 29.00 58.00 Z" fill="url(#steel)" stroke="url(#steel)" stroke-width="1.2" stroke-linejoin="round"/><path d="M 31.88 12.00 A 11.0 11.0 0 0 1 42.50 19.71" fill="none" stroke="url(#h0)" stroke-width="6.0"/><path d="M 42.43 19.49 A 11.0 11.0 0 0 1 38.37 31.97" fill="none" stroke="url(#h1)" stroke-width="6.0"/><path d="M 38.56 31.83 A 11.0 11.0 0 0 1 25.44 31.83" fill="none" stroke="url(#h2)" stroke-width="6.0"/><path d="M 25.63 31.97 A 11.0 11.0 0 0 1 21.57 19.49" fill="none" stroke="url(#h3)" stroke-width="6.0"/><path d="M 21.50 19.71 A 11.0 11.0 0 0 1 32.12 12.00" fill="none" stroke="url(#h4)" stroke-width="6.0"/>
+  </g>
+</svg>

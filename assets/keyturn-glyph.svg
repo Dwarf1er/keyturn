@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256" role="img" aria-label="Keyturn" color="#111">
+  <title>Keyturn</title>
+  <g transform="translate(32 32) rotate(32) scale(1.0) translate(-32.0 -33.50)">
+    <path d="M 29.00 32.00 L 35.00 32.00 L 35.00 43.5 L 40.00 43.5 L 40.00 48.2 L 35.00 48.2 L 35.00 50.6 L 38.40 50.6 L 38.40 54.4 L 35.00 54.4 L 35.00 58.00 L 29.00 58.00 Z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+    <circle cx="32.0" cy="23.0" r="11.0" fill="none" stroke="currentColor" stroke-width="6.0"/>
+  </g>
+</svg>
