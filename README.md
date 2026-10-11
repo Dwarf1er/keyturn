@@ -23,6 +23,13 @@ Every secret has its own schedule. Your tools never need to know how Keyturn sto
 credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service). `secrets.json` in your config
 dir holds names, schedules and last-set times, never values.
 
+<div align="center">
+
+<img alt="The Keyturn prompt asking for new values for two expired secrets" width="400" src="assets/screenshots/prompt.png" />
+<img alt="The Keyturn manage window listing three secrets and when each expires" width="500" src="assets/screenshots/manage.png" />
+
+</div>
+
 ## Table of Contents
 
 <!-- mtoc-start -->
