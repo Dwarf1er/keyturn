@@ -15,9 +15,14 @@ bundle="$stage/Keyturn.app"
 [ -f "$exe" ] || { echo "error: $exe not found (publish the app first)" >&2; exit 1; }
 [ -f "$root/assets/keyturn.icns" ] || { echo "error: assets/keyturn.icns missing (run scripts/make-icons.sh)" >&2; exit 1; }
 
+# macOS volumes are case-insensitive by default, so "Keyturn.App" (the executable) and "Keyturn.app" (the bundle
+# folder) are the SAME name there. Move the executable aside before the bundle path is touched at all: removing or
+# creating "Keyturn.app" would otherwise delete or shadow the very file being moved.
+aside="$stage/.keyturn-app.tmp"
+mv "$exe" "$aside"
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
-mv "$exe" "$bundle/Contents/MacOS/Keyturn.App"
+mv "$aside" "$bundle/Contents/MacOS/Keyturn.App"
 chmod 755 "$bundle/Contents/MacOS/Keyturn.App"
 cp "$root/assets/keyturn.icns" "$bundle/Contents/Resources/keyturn.icns"
 

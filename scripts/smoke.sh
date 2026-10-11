@@ -55,7 +55,8 @@ if [ -f "$bundle_exe" ]; then
   b="$dir/Keyturn.app"
   check "Info.plist is present"               test -f "$b/Contents/Info.plist"
   check "the icon is present"                 test -f "$b/Contents/Resources/keyturn.icns"
-  check "no loose bare executable beside it"  test ! -e "$dir/Keyturn.App"
+  # -f, not -e: on a case-insensitive volume "Keyturn.App" resolves to the Keyturn.app folder, which exists.
+  check "no loose bare executable beside it"  test ! -f "$dir/Keyturn.App"
   if command -v codesign >/dev/null 2>&1; then
     check "the bundle's signature verifies"   codesign --verify --strict "$b"
   fi
