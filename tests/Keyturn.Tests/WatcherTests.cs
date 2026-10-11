@@ -514,7 +514,8 @@ public sealed class WatchControlTests : IDisposable
         WatchLock.TryAcquire(_dir)!.Dispose();
         Assert.False(WatchControl.IsRunning(_dir));
         Assert.False(File.Exists(WatchFiles.Pid(_dir)));
-        Assert.NotNull(WatchLock.TryAcquire(_dir)); // and a new one can start
+        using var again = WatchLock.TryAcquire(_dir); // and a new one can start
+        Assert.NotNull(again);
     }
 
     [Fact]
@@ -552,8 +553,9 @@ public sealed class WatchControlTests : IDisposable
     {
         var held = WatchLock.TryAcquire(_dir)!;
         Assert.False(WatchControl.WaitUntilStopped(_dir, TimeSpan.FromMilliseconds(300)));
-        Task.Run(() => { Thread.Sleep(200); held.Dispose(); });
+        var release = Task.Run(() => { Thread.Sleep(200); held.Dispose(); });
         Assert.True(WatchControl.WaitUntilStopped(_dir, TimeSpan.FromSeconds(5)));
+        release.GetAwaiter().GetResult(); // Dispose also deletes the pid file; don't let that race the directory cleanup
     }
 
     [Fact]

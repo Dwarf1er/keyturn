@@ -116,6 +116,9 @@ public sealed class WatchCliTests : IDisposable
     }
 
     static readonly CliTimeouts Fast = new(TimeSpan.FromMilliseconds(600), TimeSpan.FromMilliseconds(600));
+    // For tests where a (pretend) watcher is expected to honour the stop request: generous, so a starved CI runner can't make the
+    // CLI give up (and delete the request) before the pretend watcher's thread has even been scheduled.
+    static readonly CliTimeouts Patient = new(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
     static readonly DateTimeOffset T0 = DateTimeOffset.Parse("2026-01-01T10:00:00+00:00");
 
     readonly string _dir = Directory.CreateTempSubdirectory("keyturn-watchcli").FullName;
@@ -139,11 +142,13 @@ public sealed class WatchCliTests : IDisposable
 
     record Result(int Code, string Out, string Err);
 
-    Result Run(params string[] args)
+    Result Run(params string[] args) => RunWith(Fast, args);
+
+    Result RunWith(CliTimeouts timeouts, params string[] args)
     {
         var o = new StringWriter(); var e = new StringWriter();
         var io = new CliIo(o, e, TextReader.Null, true, true, () => "");
-        var code = new KeyturnCli(Vault(), io, new NoPrompt(), () => T0, _autostart, Fast).Run(args);
+        var code = new KeyturnCli(Vault(), io, new NoPrompt(), () => T0, _autostart, timeouts).Run(args);
         return new Result(code, o.ToString(), e.ToString());
     }
 
@@ -155,7 +160,13 @@ public sealed class WatchCliTests : IDisposable
         WatcherIsRunning();
         return Task.Run(() =>
         {
-            while (!WatchControl.StopRequested(_dir)) Thread.Sleep(20);
+            // Bounded: if the request never comes, fail the test instead of hanging the whole run.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+            while (!WatchControl.StopRequested(_dir))
+            {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("the stop request never arrived");
+                Thread.Sleep(5);
+            }
             _watcherInTheBackground!.Dispose();
             _watcherInTheBackground = null;
         });
@@ -330,7 +341,7 @@ public sealed class WatchCliTests : IDisposable
     public async Task StopAsksNicelyThroughTheStopFileAndCleansUpAfterwards()
     {
         var pretend = PretendWatcherThatHonoursStop();
-        var r = Run("watch", "stop");
+        var r = RunWith(Patient, "watch", "stop");
         await pretend;
         Assert.Equal(0, r.Code);
         Assert.Contains("stopped the watcher", r.Err);
@@ -353,7 +364,7 @@ public sealed class WatchCliTests : IDisposable
     {
         _autostart.Installed = true;
         var pretend = PretendWatcherThatHonoursStop();
-        var r = Run("watch", "uninstall");
+        var r = RunWith(Patient, "watch", "uninstall");
         await pretend;
         Assert.Equal(0, r.Code);
         Assert.False(WatchControl.IsRunning(_dir));

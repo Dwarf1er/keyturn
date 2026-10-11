@@ -63,6 +63,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    timeout-minutes: 15
     needs: meta
     runs-on: ${{ matrix.os }}
     strategy:
@@ -74,7 +75,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - run: dotnet test -c Release
+      # A hung test must fail the job with the test's name, not stall it until GitHub's 6-hour limit.
+      - run: dotnet test -c Release --blame-hang --blame-hang-timeout 2m
 
   build:
     name: Build (${{ matrix.rid }})

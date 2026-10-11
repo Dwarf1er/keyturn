@@ -24,6 +24,7 @@ env:
 jobs:
   test:
     name: Test (${{ matrix.os }})
+    timeout-minutes: 15
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -34,7 +35,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - run: dotnet test -c Release
+      # A hung test must fail the job with the test's name, not stall it until GitHub's 6-hour limit.
+      - run: dotnet test -c Release --blame-hang --blame-hang-timeout 2m
 
   install-linux:
     name: install.sh (Linux)
@@ -136,6 +138,10 @@ jobs:
           foreach ($i in 1..20) { & $cli watch status *> $null; if ($LASTEXITCODE -eq 0) { $running = $true; break }; Start-Sleep 1 }
           Write-Host "watcher running on this runner: $running"
 
+          # GitHub ends every pwsh step with "exit $LASTEXITCODE", so a probe that exited non-zero on purpose (the poll above
+          # exits 2 while the watcher isn't running) would fail the step even though every check passed.
+          exit 0
+
       - name: Uninstall and verify nothing is left
         shell: pwsh
         run: |
@@ -148,6 +154,9 @@ jobs:
           if ($userPath -contains $dir) { throw 'the install folder is still on the user PATH' }
           schtasks /Query /TN KeyturnWatch *> $null
           if ($LASTEXITCODE -eq 0) { throw 'the KeyturnWatch task is still there' }
+
+          # `schtasks /Query` exits 1 exactly when the task is gone, which is what we want. See the note in the verify step.
+          exit 0
 
   install-macos:
     name: install.sh (macOS)

@@ -63,7 +63,7 @@ if ($Uninstall) {
         [Environment]::SetEnvironmentVariable("Path", ($kept -join ";"), "User")
     }
     Say "Uninstalled Keyturn. Your secrets and config are untouched."
-    return
+    exit 0 # not "return": the last native command above may have left a non-zero $LASTEXITCODE for the caller to trip over
 }
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
@@ -143,3 +143,7 @@ Say "  $appExe (and a `"Keyturn`" Start Menu shortcut)"
 Say ""
 if ($watcherSetUp) { Say "The background watcher is set up: Keyturn will pop up as soon as a secret expires. See it with: keyturn watch status" }
 Say "Next: keyturn add vpn daily@06:00 `"Corporate VPN password`"   (see the README's Quickstart)"
+
+# Reaching here means the install worked. A failed watcher setup only warns, but it would leave a non-zero
+# $LASTEXITCODE behind that CI (and anything else checking it) would read as a failed install.
+exit 0
