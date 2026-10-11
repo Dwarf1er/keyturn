@@ -90,6 +90,47 @@ be shown, or the wait times out, `get` exits `2`/`3` as if `--refresh` hadn't be
 - Reading the OS store directly bypasses the expiry check and is **not** a supported interface; the entry
   layout is an implementation detail and may change.
 
+## Install
+
+Download the archive for your platform from the [Releases](../../releases) page and unpack it somewhere on your
+`PATH`. Keep `keyturn` and `Keyturn.App` in the same folder: `keyturn` finds the app beside itself.
+
+| Platform | Archive |
+|---|---|
+| Linux x64 / arm64 | `keyturn-VERSION-linux-x64.tar.gz`, `keyturn-VERSION-linux-arm64.tar.gz` |
+| macOS Apple silicon / Intel | `keyturn-VERSION-osx-arm64.tar.gz`, `keyturn-VERSION-osx-x64.tar.gz` |
+| Windows x64 | `keyturn-VERSION-win-x64.zip` |
+
+Verify with `sha256sum -c SHA256SUMS`. Each archive holds two single files and nothing else to install:
+
+- **`keyturn`** (CLI): a ~3 MB NativeAOT binary that starts in milliseconds, since other tools call it.
+- **`Keyturn.App`**: a ~20 MB self-contained file with its Skia and HarfBuzz native libraries embedded. No .NET
+  install needed. On first launch .NET unpacks those libraries into a per-user folder (`~/.net/Keyturn.App/` on
+  Linux and macOS, `%TEMP%\.net\Keyturn.App\` on Windows), which is safe to delete. Launching takes roughly
+  150 ms longer than the CLI; a scheduled launch with nothing due still exits without opening a window.
+
+- **The binaries are not code-signed.** macOS Gatekeeper will quarantine them (`xattr -dr com.apple.quarantine .`
+  after unpacking) and Windows SmartScreen will warn.
+- **Linux:** the app needs a graphical session and the usual desktop libraries (fontconfig, freetype). The
+  binaries link against the glibc of the machine that built them; each release's build summary reports the
+  minimum version for both files (the app's runtime baseline is much older than the CLI's NativeAOT build). The
+  CLI works headless apart from `--refresh`.
+
+## Releasing
+
+Pushing a tag builds and publishes everything (see `.github/workflows/release.yml`):
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0      # v1.0.0-rc.1 publishes a prerelease
+```
+
+The workflow tests on Linux, Windows and macOS, builds each platform, smoke-tests it (including loading the app's
+embedded native libraries), and attaches the archives and `SHA256SUMS` to a GitHub release. **Actions > release > Run workflow** does a dry
+run (everything except publishing) from any branch. To build locally for your own OS:
+`scripts/publish.sh linux-x64 1.0.0 dist/keyturn`, then `scripts/smoke.sh dist/keyturn 1.0.0`.
+Neither NativeAOT nor the self-contained build cross-compiles between operating systems, which is why CI uses one
+runner per OS.
+
 ## Scheduled prompt
 
 `keyturn schedule install` launches the app at login and hourly (systemd user timer / launchd agent / Task

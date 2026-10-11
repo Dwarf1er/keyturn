@@ -12,6 +12,8 @@ class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Contains("--self-test")) return SelfTest.Run();
+
         // Scheduled launches must be invisible unless something needs attention, so decide
         // before Avalonia (and any window) exists. Store errors fall through to an error window.
         if (!args.Contains("--manage"))

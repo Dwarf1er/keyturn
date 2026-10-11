@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Keyturn.Cli;
 
@@ -16,7 +19,7 @@ public sealed record CliIo(
 /// The supported interface for other tools. Contract:
 /// <list type="bullet">
 /// <item>stdout carries only data (a secret value, or JSON with --json); diagnostics go to stderr.</item>
-/// <item>Exit codes: 0 ok, 1 usage error or unknown secret, 2 no value, 3 stale, 4 credential store error.</item>
+/// <item>Exit codes: 0 ok, 1 usage error or unknown secret, 2 no value, 3 stale, 4 storage error (credential store or config file).</item>
 /// <item><c>get</c> never prompts on the terminal; only <c>--refresh</c> may show the GUI prompt.</item>
 /// </list>
 /// </summary>
@@ -39,15 +42,16 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
         }
         catch (Exception ex)
         {
-            // Credential store failures (locked keyring, no D-Bus session, ...) land here.
+            // Credential store failures (locked keyring, no D-Bus session, ...) and unreadable config land here.
             var detail = ex.InnerException is { } inner ? $" ({inner.Message})" : "";
-            return Fail($"credential store error: {ex.Message.Split('\n')[0]}{detail}", StoreError);
+            return Fail($"storage error: {ex.Message.Split('\n')[0]}{detail}", StoreError);
         }
     }
 
     int Dispatch(string[] argv)
     {
         if (argv.Length == 0 || argv[0] is "-h" or "--help" or "help") return PrintUsage(argv.Length == 0 ? Usage : Ok);
+        if (argv[0] is "--version" or "-v") { io.Out.WriteLine(VersionText()); return Ok; }
         var command = argv[0];
         var args = new Args(argv.Skip(1));
 
@@ -114,8 +118,7 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
 
         if (json)
         {
-            var dto = ToDto(status);
-            io.Out.WriteLine(JsonSerializer.Serialize(new { dto.Name, dto.State, dto.ExpiresAt, Value = value }, Json(io.OutputRedirected)));
+            io.Out.WriteLine(ToJson(new GetDto(status.Definition.Name, status.State.ToString().ToLowerInvariant(), status.ExpiresAt, value)));
         }
         else
         {
@@ -244,24 +247,31 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
 
     // ---- output ----------------------------------------------------------------------------
 
-    sealed record SecretDto(string Name, string Schedule, string? Description, string State, DateTimeOffset? LastSetAt, DateTimeOffset? ExpiresAt);
-
     static SecretDto ToDto(SecretStatus s) => new(
         s.Definition.Name, s.Definition.Schedule, s.Definition.Description,
         s.State.ToString().ToLowerInvariant(), s.Definition.LastSetAt, s.ExpiresAt);
 
-    static JsonSerializerOptions Json(bool compact) => new(JsonSerializerDefaults.Web) { WriteIndented = !compact };
+    /// <summary>Compact when piped (one line for scripts), indented on a terminal.</summary>
+    string ToJson<T>(T value) =>
+        JsonSerializer.Serialize(value, (JsonTypeInfo<T>)(io.OutputRedirected ? (JsonSerializerContext)CompactJson.Default : IndentedJson.Default).GetTypeInfo(typeof(T))!);
 
     void Print(IReadOnlyList<SecretStatus> statuses, bool json, bool single = false)
     {
         if (json)
         {
             var dtos = statuses.Select(ToDto).ToList();
-            io.Out.WriteLine(single ? JsonSerializer.Serialize(dtos[0], Json(io.OutputRedirected)) : JsonSerializer.Serialize(dtos, Json(io.OutputRedirected)));
+            io.Out.WriteLine(single ? ToJson(dtos[0]) : ToJson(dtos));
             return;
         }
         foreach (var s in statuses)
             io.Out.WriteLine($"{s.Definition.Name,-24} {s.State.ToString().ToLowerInvariant(),-8} {s.Definition.Schedule,-12} {Humanize.Status(s, _now())}");
+    }
+
+    static string VersionText()
+    {
+        var info = typeof(KeyturnCli).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+        var plus = info.IndexOf('+');
+        return plus < 0 ? info : info[..plus]; // drop the source-link commit suffix
     }
 
     static int ExitFor(SecretStatus s) => s.State switch { SecretState.Missing => Missing, SecretState.Stale => Stale, _ => Ok };
@@ -298,8 +308,9 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
                                                 run cmd with secrets in its environment
               schedule install [--app PATH]     launch the prompt at login and hourly (--print to preview)
               schedule uninstall
+              --version
 
-            exit codes: 0 ok, 1 usage/unknown secret, 2 no value, 3 stale, 4 credential store error
+            exit codes: 0 ok, 1 usage/unknown secret, 2 no value, 3 stale, 4 storage error
             """);
         return code;
     }

@@ -1,0 +1,10 @@
+# Opens one PR per week when a newer major version of an action is released (e.g. actions/checkout v7 -> v8).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

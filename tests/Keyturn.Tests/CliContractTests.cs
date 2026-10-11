@@ -140,7 +140,7 @@ public sealed class CliContractTests : IDisposable
         var r = Run(["get", "vpn"]);
         Assert.Equal(4, r.Code);
         Assert.Equal("", r.Out);
-        Assert.Contains("credential store error", r.Err);
+        Assert.Contains("storage error", r.Err);
     }
 
     // ---- --refresh -------------------------------------------------------------------------
@@ -378,4 +378,24 @@ public sealed class CliContractTests : IDisposable
 
     [Fact]
     public void UnknownCommandIsAUsageError() => Assert.Equal(1, Run(["frobnicate"]).Code);
+}
+
+public class CliVersionTests
+{
+    [Fact]
+    public void VersionPrintsToStdoutAndExits0()
+    {
+        var o = new StringWriter();
+        var io = new CliIo(o, new StringWriter(), TextReader.Null, true, true, () => "");
+        var code = new KeyturnCli(new SecretVault(new NullBackend(), Path.Combine(Path.GetTempPath(), "nope", "s.json")), io, new ProcessPromptLauncher()).Run(["--version"]);
+        Assert.Equal(0, code);
+        Assert.Matches(@"^\d+\.\d+\.\d+", o.ToString().Trim());
+    }
+
+    sealed class NullBackend : ISecretBackend
+    {
+        public string? Get(string name) => null;
+        public void Set(string name, string value) { }
+        public void Remove(string name) { }
+    }
 }

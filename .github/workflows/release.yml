@@ -1,0 +1,181 @@
+name: release
+
+# Push a tag like v1.2.3 (or v1.2.3-rc.1 for a prerelease) to test, build every platform and publish a GitHub
+# release. The CLI is a NativeAOT single file; the app is a trimmed self-contained single file with its native
+# libraries embedded (NativeAOT can't embed them). See scripts/publish.sh.
+#
+# Runners: always the floating "-latest" labels. GitHub has no floating label for Linux arm64, so that one names
+# the newest image explicitly and needs a manual bump when a newer one appears.
+#
+# "Run workflow" (workflow_dispatch) does everything except publish, to dry-run the pipeline from a branch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the dry-run build (no release is created)"
+        default: "0.0.0-dev"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - id: v
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            version="${REF_NAME#v}"
+            publish=true
+          else
+            version="$INPUT_VERSION"
+            publish=false
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a valid version (expected e.g. 1.2.3 or 1.2.3-rc.1)"
+            exit 1
+          fi
+          prerelease=false
+          [[ "$version" == *-* ]] && prerelease=true
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Version $version (prerelease=$prerelease, publish=$publish)"
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test -c Release
+
+  build:
+    name: Build (${{ matrix.rid }})
+    needs: [meta, test]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64,   os: ubuntu-latest,     archive: tar.gz, smoke: true }
+          - { rid: linux-arm64, os: ubuntu-26.04-arm,  archive: tar.gz, smoke: true }
+          - { rid: osx-arm64,   os: macos-latest,      archive: tar.gz, smoke: true }
+          # Cross-architecture build on the arm64 runner; the binary can't be run there, so no smoke test.
+          - { rid: osx-x64,     os: macos-latest,      archive: tar.gz, smoke: false }
+          - { rid: win-x64,     os: windows-latest,    archive: zip,    smoke: true }
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      NAME: keyturn-${{ needs.meta.outputs.version }}-${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      # NativeAOT links with the platform toolchain. Windows (MSVC) and macOS (Xcode) runners have it.
+      - name: Install NativeAOT prerequisites (Linux, for the CLI)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish (NativeAOT)
+        shell: bash
+        run: scripts/publish.sh "${{ matrix.rid }}" "$VERSION" "dist/$NAME"
+
+      - name: Smoke test
+        if: matrix.smoke
+        shell: bash
+        run: scripts/smoke.sh "dist/$NAME" "$VERSION"
+
+      # Informational: the first real signal for each OS's credential store. A hosted runner may not have a
+      # usable (unlocked) store, so this must not block a release.
+      - name: Credential store round trip (informational)
+        if: matrix.smoke && runner.os != 'Linux'
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: bash
+        run: scripts/smoke.sh "dist/$NAME" "$VERSION" store
+
+      - name: Report the glibc floor (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          for bin in keyturn Keyturn.App; do
+            floor=$(objdump -T "dist/$NAME/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "- ${{ matrix.rid }} \`$bin\` needs ${floor} or newer" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/$env:NAME" -DestinationPath "dist/$env:NAME.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.NAME }}
+          path: dist/${{ env.NAME }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [meta, build]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: keyturn-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum keyturn-* | tee SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          args=()
+          [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Keyturn $VERSION" \
+            --generate-notes \
+            "${args[@]}"

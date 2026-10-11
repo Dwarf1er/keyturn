@@ -4,8 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Published as a trimmed, self-contained single file (scripts/publish.sh): NativeAOT cannot embed Skia/HarfBuzz. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('linux'))">
+    <!-- A NativeAOT binary won't start on Linux without libicu; Windows/macOS keep localized formats. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,0 +1,6 @@
+# actionlint ships a fixed list of GitHub-hosted runner labels that lags new images. These exist per
+# https://github.com/actions/runner-images; listing them here only silences the linter's "unknown label" error.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

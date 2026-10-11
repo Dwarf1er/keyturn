@@ -9,12 +9,6 @@ namespace Keyturn;
 /// </summary>
 public sealed class SecretVault
 {
-    static readonly JsonSerializerOptions Json = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     readonly ISecretBackend _backend;
     readonly string _configPath;
     readonly Func<DateTimeOffset> _now;
@@ -111,14 +105,19 @@ public sealed class SecretVault
     {
         if (!File.Exists(_configPath)) return [];
         using var stream = File.OpenRead(_configPath);
-        return JsonSerializer.Deserialize<List<SecretDefinition>>(stream, Json) ?? [];
+        return JsonSerializer.Deserialize(stream, VaultJson.Default.ListSecretDefinition) ?? [];
     }
 
     void Save(List<SecretDefinition> all)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
         var tmp = _configPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(all.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase), Json));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(all.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList(), VaultJson.Default.ListSecretDefinition));
         File.Move(tmp, _configPath, overwrite: true);
     }
 }
+
+/// <summary>Source-generated serializer for secrets.json, so the file works under NativeAOT and trimming.</summary>
+[JsonSourceGenerationOptions(WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(List<SecretDefinition>))]
+internal partial class VaultJson : JsonSerializerContext;
