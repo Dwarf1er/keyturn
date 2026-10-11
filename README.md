@@ -24,10 +24,12 @@ credential store (macOS Keychain, Windows Credential Manager, Linux Secret Servi
 dir holds names, schedules and last-set times, never values.
 
 <div align="center">
-
-<img alt="The Keyturn prompt asking for new values for two expired secrets" width="400" src="assets/screenshots/prompt.png" />
-<img alt="The Keyturn manage window listing three secrets and when each expires" width="500" src="assets/screenshots/manage.png" />
-
+<table>
+  <tr>
+    <td valign="middle"><img alt="The Keyturn prompt asking for new values for two expired secrets" width="360" src="assets/screenshots/prompt.png" /></td>
+    <td valign="middle"><img alt="The Keyturn manage window listing three secrets and when each expires" width="450" src="assets/screenshots/manage.png" /></td>
+  </tr>
+</table>
 </div>
 
 ## Table of Contents
