@@ -15,7 +15,7 @@ public partial class App : Application
             var manage = desktop.Args?.Contains("--manage") == true;
             try
             {
-                desktop.MainWindow = new MainWindow(new SecretVault(), manage, Program.OnlyArg(desktop.Args?.ToArray()));
+                desktop.MainWindow = new MainWindow(new SecretVault(), manage, Program.OnlyArg(desktop.Args?.ToArray()), desktop.Args?.Contains("--respect-snooze") == true);
             }
             catch (Exception ex)
             {

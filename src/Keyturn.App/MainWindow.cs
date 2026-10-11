@@ -11,7 +11,9 @@ using Avalonia.VisualTree;
 namespace Keyturn.App;
 
 /// <summary>
-/// Prompt mode: only secrets that need a new value, one Save for all of them.
+/// Prompt mode: only secrets that need a new value, one Save for all of them. It is live: it adds secrets that expire
+/// while it is open, drops ones rotated elsewhere (a tool, the CLI), keeps what you've typed, and closes itself when
+/// nothing is left.
 /// Manage mode: every secret with its schedule, plus create/remove, each card saving on its own.
 /// </summary>
 public sealed class MainWindow : Window
@@ -19,6 +21,10 @@ public sealed class MainWindow : Window
     readonly SecretVault _vault;
     readonly bool _manage;
     readonly string? _only;
+    readonly SnoozeStore? _snooze;
+    readonly Dictionary<string, Border> _promptCards = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, TextBlock> _pillTexts = new(StringComparer.OrdinalIgnoreCase);
+    bool _closing;
     readonly StackPanel _cards = new() { Spacing = 12 };
     readonly TextBlock _subtitle = new() { Classes = { "muted" } };
     readonly TextBlock _error = new() { Classes = { "error" }, TextWrapping = TextWrapping.Wrap, IsVisible = false };
@@ -28,11 +34,12 @@ public sealed class MainWindow : Window
     Border? _newPanel;
     Button? _saveAll;
 
-    public MainWindow(SecretVault vault, bool manage, string? only = null)
+    public MainWindow(SecretVault vault, bool manage, string? only = null, bool respectSnooze = false)
     {
         _vault = vault;
         _manage = manage;
         _only = only;
+        _snooze = respectSnooze ? new SnoozeStore(vault.ConfigDirectory) : null;
 
         Title = manage ? "Keyturn" : "Keyturn: secrets due";
         Width = manage ? 600 : 480;
@@ -42,6 +49,7 @@ public sealed class MainWindow : Window
         Topmost = !manage; // a scheduled prompt should be seen, not buried
         CanResize = false;
         KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        Closed += (_, _) => _closing = true;
 
         var root = new DockPanel { Margin = new Thickness(24) };
 
@@ -70,6 +78,16 @@ public sealed class MainWindow : Window
 
         Content = root;
         Rebuild();
+
+        if (!manage)
+        {
+            // Best effort to come to the front; the OS may still keep focus on whatever you were typing in.
+            Opened += (_, _) => Activate();
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            timer.Tick += (_, _) => ReconcilePrompt();
+            Opened += (_, _) => timer.Start();
+            Closed += (_, _) => timer.Stop();
+        }
     }
 
     // ---- chrome ----------------------------------------------------------------------------
@@ -120,8 +138,79 @@ public sealed class MainWindow : Window
 
     // ---- content ---------------------------------------------------------------------------
 
+    /// <summary>What the prompt should show now: due, not dismissed, and (for `--refresh`) the one secret asked about.</summary>
+    IReadOnlyList<SecretStatus> PromptSecrets(bool consultStore) =>
+        (consultStore ? _vault.Due() : _vault.Expired())
+            .Where(s => _only is null || s.Definition.Name.Equals(_only, StringComparison.OrdinalIgnoreCase))
+            .Where(s => _snooze is null || !_snooze.IsSnoozed(s.Definition))
+            .ToList();
+
+    void RebuildPrompt()
+    {
+        _cards.Children.Clear();
+        _values.Clear();
+        _promptCards.Clear();
+        _pillTexts.Clear();
+        _error.IsVisible = false;
+
+        var shown = PromptSecrets(consultStore: true);
+        UpdatePromptSubtitle(shown.Count);
+        if (shown.Count == 0) _cards.Children.Add(EmptyState());
+        foreach (var s in shown) AddPromptCard(s);
+        Dispatcher.UIThread.Post(() => _values.Values.FirstOrDefault()?.Focus());
+    }
+
+    void UpdatePromptSubtitle(int count) => _subtitle.Text = $"{Humanize.Count(count, "secret needs", "secrets need")} a new value";
+
+    void AddPromptCard(SecretStatus s)
+    {
+        var card = PromptCard(s);
+        _promptCards[s.Definition.Name] = card;
+        _cards.Children.Add(card);
+    }
+
+    /// <summary>The live part: bring the cards in line with what is due right now, without disturbing what you have typed.</summary>
+    void ReconcilePrompt()
+    {
+        if (_closing) return;
+        IReadOnlyList<SecretStatus> want;
+        try { want = PromptSecrets(consultStore: false); }
+        catch (Exception) { return; } // a half-written file or a transient error: try again on the next tick
+
+        var wanted = want.Select(s => s.Definition.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var gone in _promptCards.Keys.Where(name => !wanted.Contains(name)).ToList())
+        {
+            _cards.Children.Remove(_promptCards[gone]); // rotated by a tool or the CLI, or snoozed
+            _promptCards.Remove(gone);
+            _values.Remove(gone);
+            _pillTexts.Remove(gone);
+        }
+
+        var added = false;
+        foreach (var s in want.Where(s => !_promptCards.ContainsKey(s.Definition.Name)))
+        {
+            AddPromptCard(s);
+            added = true;
+        }
+        foreach (var s in want)
+            if (_pillTexts.TryGetValue(s.Definition.Name, out var text)) text.Text = Humanize.Status(s, DateTimeOffset.Now);
+
+        UpdatePromptSubtitle(want.Count);
+        if (want.Count == 0)
+        {
+            _closing = true;
+            Close(); // nothing left to ask for
+        }
+        else if (added)
+        {
+            Activate();
+        }
+    }
+
     void Rebuild()
     {
+        if (!_manage) { RebuildPrompt(); return; }
+
         _cards.Children.Clear();
         _values.Clear();
         _error.IsVisible = false;
@@ -276,15 +365,22 @@ public sealed class MainWindow : Window
         return new Border { Classes = { "card" }, Child = new StackPanel { Children = { header, details } } };
     }
 
-    static Border StatusPill(SecretStatus s) => new()
+    static Border StatusPill(SecretStatus s) => StatusPill(s, out _);
+
+    static Border StatusPill(SecretStatus s, out TextBlock text)
     {
-        Classes = { "pill", s.State switch { SecretState.Missing => "warn", SecretState.Stale => "bad", _ => "ok" } },
-        Child = Row(new Ellipse { Classes = { "dot" } }, new TextBlock { Text = Humanize.Status(s, DateTimeOffset.Now), VerticalAlignment = VerticalAlignment.Center }),
-    };
+        text = new TextBlock { Text = Humanize.Status(s, DateTimeOffset.Now), VerticalAlignment = VerticalAlignment.Center };
+        return new Border
+        {
+            Classes = { "pill", s.State switch { SecretState.Missing => "warn", SecretState.Stale => "bad", _ => "ok" } },
+            Child = Row(new Ellipse { Classes = { "dot" } }, text),
+        };
+    }
 
     Control NameLine(SecretStatus s)
     {
-        var pill = StatusPill(s);
+        var pill = StatusPill(s, out var pillText);
+        if (!_manage) _pillTexts[s.Definition.Name] = pillText; // kept current by the live refresh ("Expired 5m ago")
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         grid.Children.Add(new TextBlock { Text = s.Definition.Name, Classes = { "name" }, VerticalAlignment = VerticalAlignment.Center });
         Grid.SetColumn(pill, 1);
@@ -367,7 +463,7 @@ public sealed class MainWindow : Window
         if (!Try(() => { foreach (var (name, box) in entered) { _vault.Set(name, box.Text!); box.Text = ""; } })) return;
 
         await Flash(_saveAll!, "Saved");
-        Close();
+        if (!_closing) { _closing = true; Close(); }
     }
 
     /// <summary>Briefly turns a button green with a checkmark so saving feels acknowledged.</summary>

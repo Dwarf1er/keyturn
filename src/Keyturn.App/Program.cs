@@ -13,15 +13,20 @@ class Program
     public static int Main(string[] args)
     {
         if (args.Contains("--self-test")) return SelfTest.Run();
+        if (args.Contains("--watch")) return WatchMode.Run(args);
 
-        // Scheduled launches must be invisible unless something needs attention, so decide
-        // before Avalonia (and any window) exists. Store errors fall through to an error window.
+        // A launch with nothing to show must be invisible, so decide before Avalonia (and any window) exists.
+        // Store errors fall through to an error window.
         if (!args.Contains("--manage"))
         {
             try
             {
+                var vault = new SecretVault();
                 var only = OnlyArg(args);
-                var due = new SecretVault().Due().Where(s => only is null || s.Definition.Name.Equals(only, StringComparison.OrdinalIgnoreCase));
+                var snooze = args.Contains("--respect-snooze") ? new SnoozeStore(vault.ConfigDirectory) : null;
+                var due = vault.Due()
+                    .Where(s => only is null || s.Definition.Name.Equals(only, StringComparison.OrdinalIgnoreCase))
+                    .Where(s => snooze is null || !snooze.IsSnoozed(s.Definition));
                 if (!due.Any()) return 0;
             }
             catch { /* shown by App */ }

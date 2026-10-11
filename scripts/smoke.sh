@@ -33,7 +33,7 @@ bundle_exe="$dir/Keyturn.app/Contents/MacOS/Keyturn.App"
 
 check "keyturn$ext exists"             test -f "$k"
 check "the app exists"                 test -f "$app"
-check "keyturn can locate the app"     exit_is 0 "$k" schedule install --print
+check "keyturn can locate the app"     exit_is 0 "$k" watch install --print
 check "--version is $version"          test "$("$k" --version)" = "$version"
 check "add defines a secret"           exit_is 0 "$k" add smoke 12h "ci smoke"
 check "list --json shows it"           bash -c "\"$k\" list --json | grep -q '\"name\":\"smoke\"'"
@@ -47,7 +47,30 @@ app_selftest() {
   local log; log=$(mktemp)
   KEYTURN_SELFTEST_LOG=$log "$app" --self-test >/dev/null 2>&1 || { cat "$log" 2>/dev/null; return 1; }
 }
+# The background watcher, in an isolated config dir: it starts, a second copy refuses to run, `watch status` sees it,
+# and `watch stop` ends it. (Nothing here opens a window: no secret is ever due.)
+watcher_lifecycle() (
+  export KEYTURN_CONFIG_DIR
+  KEYTURN_CONFIG_DIR=$(mktemp -d)
+  "$app" --watch >/dev/null 2>&1 &
+  pid=$!
+  up=0
+  for _ in $(seq 1 60); do
+    "$k" watch status >/dev/null 2>&1 && { up=1; break; }
+    sleep 0.25
+  done
+  [ "$up" = 1 ] || { kill "$pid" 2>/dev/null; echo "       the watcher never reported running"; return 1; }
+  "$app" --watch >/dev/null 2>&1 || { echo "       a second watcher did not exit cleanly"; return 1; }   # exits 0 at once: one per user
+  "$k" watch status --json | grep -q '"running": *true' || { echo "       status --json does not say running"; return 1; }
+  "$k" watch stop >/dev/null 2>&1 || { echo "       watch stop failed"; return 1; }
+  "$k" watch status >/dev/null 2>&1
+  [ $? -eq 2 ] || { echo "       the watcher is still reported running after stop"; return 1; }
+  wait "$pid" 2>/dev/null
+  return 0
+)
+
 check "app exits silently when nothing is due"        exit_is 0 app_silent
+check "the watcher starts, runs once, and stops"      watcher_lifecycle
 check "app's bundled Skia/HarfBuzz natives load"      app_selftest
 
 if [ -f "$bundle_exe" ]; then

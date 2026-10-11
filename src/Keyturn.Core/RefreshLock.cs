@@ -1,10 +1,10 @@
-namespace Keyturn.Cli;
+namespace Keyturn;
 
 /// <summary>
-/// Cross-process lock so that many tools finding the same secret expired produce one prompt, not many.
-/// Held for the life of the object; released on dispose (or when the process dies).
+/// Cross-process lock so that many tools (and the background watcher) finding the same secret expired produce one
+/// prompt, not many. Held for the life of the object; released on dispose (or when the process dies).
 /// </summary>
-sealed class RefreshLock : IDisposable
+public sealed class RefreshLock : IDisposable
 {
     readonly FileStream _stream;
     RefreshLock(FileStream stream) => _stream = stream;

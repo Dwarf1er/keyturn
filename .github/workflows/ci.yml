@@ -3,7 +3,8 @@ name: ci
 # Tests on every push and pull request (including Dependabot's), and proves the from-source installers work on
 # real machines: the Linux one on Ubuntu, the Windows one on Windows, the macOS one on macOS, including the parts
 # that can't be tested anywhere else (Windows: user PATH, Start Menu shortcut, the icon embedded in the exes;
-# macOS: the bundle, its ad-hoc signature and its icon file). Whether the Dock icon actually *shows* needs a person.
+# macOS: the bundle, its ad-hoc signature and its icon file, and the watcher's login entry). Whether the Dock icon
+# actually *shows* needs a person.
 on:
   push:
     branches: [master]
@@ -57,6 +58,11 @@ jobs:
           desktop-file-validate "$HOME/.local/share/applications/keyturn.desktop"
           [ -f "$HOME/.local/share/icons/hicolor/256x256/apps/keyturn.png" ]
           [ -f "$HOME/.local/share/icons/hicolor/scalable/apps/keyturn.svg" ]
+          # The installer wrote the watcher's user service. Whether systemd could start it depends on the runner having
+          # a user session, so only the file is asserted.
+          unit="$HOME/.config/systemd/user/keyturn-watch.service"
+          [ -f "$unit" ]
+          grep -q -- '--watch' "$unit"
 
       - name: Uninstall and verify nothing is left
         run: |
@@ -67,6 +73,7 @@ jobs:
           [ ! -e "$HOME/.local/bin/Keyturn.App" ]
           [ ! -e "$HOME/.local/share/applications/keyturn.desktop" ]
           [ ! -e "$HOME/.local/share/icons/hicolor/256x256/apps/keyturn.png" ]
+          [ ! -e "$HOME/.config/systemd/user/keyturn-watch.service" ]
 
   install-windows:
     name: install.ps1 (Windows)
@@ -115,6 +122,20 @@ jobs:
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
           if ($userPath -notcontains $dir) { throw "$dir is not on the user PATH" }
 
+          # The watcher: a logon task with the settings a long-running process needs.
+          $taskXml = (schtasks /Query /TN KeyturnWatch /XML | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw 'the KeyturnWatch task was not created' }
+          foreach ($needle in '<LogonTrigger>', '<ExecutionTimeLimit>PT0S', '<DisallowStartIfOnBatteries>false', '<StartWhenAvailable>true', '--watch') {
+            if ($taskXml -notmatch [regex]::Escape($needle)) { throw "the KeyturnWatch task is missing $needle" }
+          }
+          schtasks /Query /TN Keyturn *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'the old hourly "Keyturn" task is still there' }
+
+          # Informational: whether this runner's session let the task start the watcher.
+          $running = $false
+          foreach ($i in 1..20) { & $cli watch status *> $null; if ($LASTEXITCODE -eq 0) { $running = $true; break }; Start-Sleep 1 }
+          Write-Host "watcher running on this runner: $running"
+
       - name: Uninstall and verify nothing is left
         shell: pwsh
         run: |
@@ -125,6 +146,8 @@ jobs:
           if (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Keyturn.lnk')) { throw 'the shortcut is still there' }
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
           if ($userPath -contains $dir) { throw 'the install folder is still on the user PATH' }
+          schtasks /Query /TN KeyturnWatch *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'the KeyturnWatch task is still there' }
 
   install-macos:
     name: install.sh (macOS)
@@ -175,10 +198,16 @@ jobs:
         run: |
           set -euo pipefail
           exe="$HOME/Applications/Keyturn.app/Contents/MacOS/Keyturn.App"
+          # The installer wrote the watcher's launch agent. Whether launchd could load it depends on the runner having a
+          # GUI session, so the file is what's asserted.
+          agent="$HOME/Library/LaunchAgents/com.antoinepoulin.keyturn.watch.plist"
+          [ -f "$agent" ]
+          plutil -lint "$agent"
+          grep -q -- '--watch' "$agent"
           "$HOME/.local/bin/keyturn" --version
           "$exe" --self-test
           # The CLI finds the bundle in ~/Applications and would run the inner binary directly from launchd.
-          "$HOME/.local/bin/keyturn" schedule install --print | tee "$RUNNER_TEMP/launchd.plist"
+          "$HOME/.local/bin/keyturn" watch install --print | tee "$RUNNER_TEMP/launchd.plist"
           grep -qF "$exe" "$RUNNER_TEMP/launchd.plist"
           # The first line of --print output is a "# path" comment; the rest must be a valid plist.
           sed 1d "$RUNNER_TEMP/launchd.plist" > "$RUNNER_TEMP/launchd-clean.plist"
@@ -190,3 +219,31 @@ jobs:
           ./install.sh -u
           [ ! -e "$HOME/Applications/Keyturn.app" ]
           [ ! -e "$HOME/.local/bin/keyturn" ]
+          [ ! -e "$HOME/Library/LaunchAgents/com.antoinepoulin.keyturn.watch.plist" ]
+
+  # Packages exactly what a release does and smoke-tests it, so a pull request finds a broken package or watcher now
+  # and not on the day of a release.
+  package:
+    name: Package and smoke-test (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-latest }
+          - { rid: win-x64,   os: windows-latest }
+          - { rid: osx-arm64, os: macos-latest }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish
+        shell: bash
+        run: scripts/publish.sh "${{ matrix.rid }}" 0.0.0-ci dist/keyturn
+
+      - name: Smoke test (includes the watcher's start/stop lifecycle)
+        shell: bash
+        run: scripts/smoke.sh dist/keyturn 0.0.0-ci

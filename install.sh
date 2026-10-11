@@ -1,12 +1,14 @@
 #!/bin/sh
 # Builds Keyturn from this checkout and installs it for the current user (no root needed).
 #
-#   ./install.sh       build and install
+#   ./install.sh       build and install, and start the background watcher
 #   ./install.sh -u    uninstall
 #
 # Everything goes to fixed locations:
 #   Linux   ~/.local/bin/keyturn and Keyturn.App, plus a menu entry and icons under ~/.local/share
 #   macOS   ~/.local/bin/keyturn, and Keyturn.app (with its icon) in ~/Applications
+# It also sets up the background watcher that pops the prompt up when a secret expires (a user service on Linux, a launch
+# agent on macOS), and starts it. Remove it with `keyturn watch uninstall`, or everything with ./install.sh -u.
 # Your secrets and config are never touched. Prefer a prebuilt binary? Download an archive from the Releases page.
 set -eu
 
@@ -59,8 +61,8 @@ refresh_caches() {
 }
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    # Remove the scheduled prompt first, while the CLI that knows how still exists.
-    [ -x "$BIN_DIR/keyturn" ] && "$BIN_DIR/keyturn" schedule uninstall >/dev/null 2>&1 || true
+    # Stop the watcher and remove it from the login items first, while the CLI that knows how still exists.
+    [ -x "$BIN_DIR/keyturn" ] && "$BIN_DIR/keyturn" watch uninstall >/dev/null 2>&1 || true
     rm -f "$BIN_DIR/keyturn" "$BIN_DIR/Keyturn.App"
     if [ "$OS" = linux ]; then
         rm -f "$DATA_DIR/applications/keyturn.desktop" "$DATA_DIR/icons/hicolor/scalable/apps/keyturn.svg"
@@ -100,6 +102,10 @@ install_file() {
 }
 
 mkdir -p "$BIN_DIR"
+
+# A running watcher would keep running the old version after an upgrade, so stop it before replacing anything.
+[ -x "$BIN_DIR/keyturn" ] && "$BIN_DIR/keyturn" watch stop >/dev/null 2>&1 || true
+
 install_file "$TMP/cli/keyturn" "$BIN_DIR/keyturn"
 
 if [ "$OS" = macos ]; then
@@ -137,6 +143,15 @@ EOF
     refresh_caches
 fi
 
+# Set up the watcher (login item) and start it. Not fatal: Keyturn works without it, it just can't prompt by itself.
+WATCHER=""
+if "$BIN_DIR/keyturn" watch install >"$TMP/watch.log" 2>&1; then
+    WATCHER=1
+else
+    cat "$TMP/watch.log" >&2
+    echo "warning: couldn't set up the background watcher. Try again later with: keyturn watch install" >&2
+fi
+
 echo ""
 echo "Keyturn installed:"
 echo "  $BIN_DIR/keyturn"
@@ -146,6 +161,7 @@ else
     echo "  $BIN_DIR/Keyturn.App (and a \"Keyturn\" entry in your application menu)"
 fi
 echo ""
+[ -n "$WATCHER" ] && echo "The background watcher is set up: Keyturn will pop up as soon as a secret expires. See it with: keyturn watch status"
 echo "Next: keyturn add vpn daily@06:00 \"Corporate VPN password\"   (see the README's Quickstart)"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;

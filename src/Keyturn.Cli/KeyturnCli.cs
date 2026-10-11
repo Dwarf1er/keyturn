@@ -23,12 +23,23 @@ public sealed record CliIo(
 /// <item><c>get</c> never prompts on the terminal; only <c>--refresh</c> may show the GUI prompt.</item>
 /// </list>
 /// </summary>
-public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prompt, Func<DateTimeOffset>? now = null)
+/// <summary>How long the CLI waits for the watcher to start or stop. Injectable so tests don't wait for real.</summary>
+public sealed record CliTimeouts(TimeSpan WatcherStart, TimeSpan WatcherStop)
+{
+    public static CliTimeouts Default { get; } = new(TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(15));
+}
+
+public sealed class KeyturnCli(
+    SecretVault vault, CliIo io, IPromptLauncher prompt, Func<DateTimeOffset>? now = null,
+    IAutostart? autostart = null, CliTimeouts? timeouts = null)
 {
     public const int Ok = 0, Usage = 1, Missing = 2, Stale = 3, StoreError = 4;
+    public const int NotRunning = 2; // `watch status` only
     public static readonly TimeSpan DefaultRefreshTimeout = TimeSpan.FromMinutes(5);
 
     readonly Func<DateTimeOffset> _now = now ?? (() => DateTimeOffset.Now);
+    readonly IAutostart _autostart = autostart ?? new OsAutostart();
+    readonly CliTimeouts _timeouts = timeouts ?? CliTimeouts.Default;
 
     public int Run(string[] argv)
     {
@@ -65,7 +76,7 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
             "get" => Get(args),
             "remove" => Remove(args),
             "run" => RunWith(argv.Skip(1).ToArray()),
-            "schedule" => ScheduleCommand(args),
+            "watch" => Watch(args),
             _ => Fail($"unknown command '{command}'", Usage, printUsage: true),
         };
     }
@@ -75,7 +86,9 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
     int List(Args a)
     {
         var json = a.Flag("--json");
-        Print(vault.Statuses(), json);
+        var statuses = vault.Statuses();
+        Print(statuses, json);
+        if (!json && statuses.Any(s => s.NeedsAttention)) WarnIfNotWatching();
         return Ok;
     }
 
@@ -165,6 +178,7 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
         var usage = "add <name> <schedule> [description]";
         var def = vault.Define(a.Positional(0, usage), a.Positional(1, usage), a.Count > 2 ? string.Join(' ', a.Rest(2)) : null);
         io.Err.WriteLine($"Defined '{def.Name}' (rotates {def.Schedule}). Set a value with: keyturn set {def.Name}");
+        WarnIfNotWatching();
         return Ok;
     }
 
@@ -231,22 +245,138 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
         }
     }
 
-    int ScheduleCommand(Args a)
+    // ---- the background watcher --------------------------------------------------------------------------------------
+
+    string ConfigDirectory => vault.ConfigDirectory;
+
+    void WarnIfNotWatching()
     {
-        switch (a.Positional(0, "schedule install [--app PATH] [--print] | uninstall"))
+        if (!WatchControl.IsRunning(ConfigDirectory))
+            io.Err.WriteLine("keyturn: warning: the watcher isn't running, so nothing will prompt you when a secret expires. Start it with: keyturn watch install");
+    }
+
+    int Watch(Args a)
+    {
+        const string usage = "watch install [--app PATH] [--print] | uninstall | start | stop | status [--json]";
+        switch (a.Positional(0, usage))
         {
-            case "install":
-                var explicitApp = a.Option("--app");
-                var app = AppLocator.Find(explicitApp)
-                    ?? throw new ArgumentException(explicitApp is null
-                        ? "can't find the Keyturn app. Put it next to the keyturn CLI (on macOS: Keyturn.app beside it, or in ~/Applications), or pass --app PATH."
-                        : $"App not found: {explicitApp}");
-                return Scheduler.Install(app, a.Flag("--print"));
-            case "uninstall":
-                return Scheduler.Uninstall();
-            default:
-                return Fail("usage: keyturn schedule install [--app PATH] [--print] | uninstall", Usage);
+            case "install": return WatchInstall(a);
+            case "uninstall": return WatchUninstall();
+            case "start": return WatchStart();
+            case "stop": return StopWatcher(report: true);
+            case "status": return WatchStatus(a);
+            default: return Fail($"usage: keyturn {usage}", Usage);
         }
+    }
+
+    bool WaitForWatcher(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!WatchControl.IsRunning(ConfigDirectory))
+        {
+            if (DateTime.UtcNow >= deadline) return false;
+            Thread.Sleep(100);
+        }
+        return true;
+    }
+
+    int WatchInstall(Args a)
+    {
+        var explicitApp = a.Option("--app");
+        var print = a.Flag("--print");
+        var app = AppLocator.Find(explicitApp)
+            ?? throw new ArgumentException(explicitApp is null
+                ? "can't find the Keyturn app. Put it next to the keyturn CLI (on macOS: Keyturn.app beside it, or in ~/Applications), or pass --app PATH."
+                : $"App not found: {explicitApp}");
+
+        var rc = _autostart.Install(app, print);
+        if (print) return rc;
+        if (rc != 0) return Fail("couldn't set the watcher up to start at login (see above). You can still run it by hand: Keyturn.App --watch", Usage);
+
+        // Linux and macOS start it as part of installing; Windows needs a nudge.
+        if (!WaitForWatcher(TimeSpan.FromMilliseconds(Math.Min(3000, _timeouts.WatcherStart.TotalMilliseconds / 2))))
+            _autostart.Start();
+        if (WaitForWatcher(_timeouts.WatcherStart))
+            io.Err.WriteLine("keyturn: the watcher is running. You'll be prompted as soon as a secret expires.");
+        else
+            io.Err.WriteLine("keyturn: set up to start at login, but it isn't running yet. Start it now with: keyturn watch start");
+        return Ok;
+    }
+
+    int WatchStart()
+    {
+        if (WatchControl.IsRunning(ConfigDirectory))
+        {
+            io.Err.WriteLine("keyturn: the watcher is already running.");
+            return Ok;
+        }
+        if (!_autostart.IsInstalled())
+            return Fail("the watcher isn't set up to start at login. Run: keyturn watch install", Usage);
+        if (_autostart.Start() != 0) return Fail("couldn't start the watcher (see above)", Usage);
+        if (!WaitForWatcher(_timeouts.WatcherStart))
+            return Fail("started it, but the watcher isn't running yet. Check: keyturn watch status", Usage);
+        io.Err.WriteLine("keyturn: the watcher is running.");
+        return Ok;
+    }
+
+    /// <summary>Asks the watcher to stop through its stop file, and only kills it (never anything but a Keyturn process) if it ignores that.</summary>
+    int StopWatcher(bool report)
+    {
+        if (!WatchControl.IsRunning(ConfigDirectory))
+        {
+            if (report) io.Err.WriteLine("keyturn: the watcher isn't running.");
+            return Ok;
+        }
+
+        var info = WatchControl.Info(ConfigDirectory);
+        WatchControl.RequestStop(ConfigDirectory);
+        var stopped = WatchControl.WaitUntilStopped(ConfigDirectory, _timeouts.WatcherStop);
+        WatchControl.ClearStopRequest(ConfigDirectory);
+        if (!stopped && info is not null && WatchControl.TryKill(info))
+            stopped = WatchControl.WaitUntilStopped(ConfigDirectory, TimeSpan.FromSeconds(5));
+
+        if (!stopped) return Fail("couldn't stop the watcher", Usage);
+        if (report) io.Err.WriteLine("keyturn: stopped the watcher. It starts again at your next login; start it now with: keyturn watch start");
+        return Ok;
+    }
+
+    int WatchUninstall()
+    {
+        if (StopWatcher(report: false) != Ok) io.Err.WriteLine("keyturn: warning: the watcher couldn't be stopped; removing it from your login items anyway.");
+        _autostart.Uninstall();
+        io.Err.WriteLine("keyturn: removed the watcher from your login items.");
+        return Ok;
+    }
+
+    int WatchStatus(Args a)
+    {
+        var json = a.Flag("--json");
+        var info = WatchControl.Info(ConfigDirectory);
+        var running = WatchControl.IsRunning(ConfigDirectory);
+        var installed = _autostart.IsInstalled();
+        var next = vault.NextToExpire();
+        var snoozed = new SnoozeStore(ConfigDirectory, _now).Active();
+        var log = new WatchLog(ConfigDirectory);
+
+        if (json)
+        {
+            io.Out.WriteLine(ToJson(new WatchStatusDto(
+                installed, running, info?.ProcessId, info?.StartedAt,
+                next is { ExpiresAt: { } at } ? new NextExpiryDto(next.Definition.Name, at) : null,
+                snoozed.Select(x => new SnoozedDto(x.Name, x.Until)).ToList(),
+                WatchFiles.Log(ConfigDirectory))));
+        }
+        else
+        {
+            io.Out.WriteLine($"watcher:   {(running ? $"running{(info is null ? "" : $" (pid {info.ProcessId}, since {info.StartedAt:g})")}" : "not running")}");
+            io.Out.WriteLine($"autostart: {(installed ? "set up to start at login" : "not set up")}");
+            io.Out.WriteLine($"next:      {(next is { ExpiresAt: { } expires } ? $"{next.Definition.Name} expires {expires:g} (in {Humanize.Span(expires - _now())})" : "nothing scheduled to expire")}");
+            foreach (var (name, until) in snoozed) io.Out.WriteLine($"snoozed:   {name} until {until:t}");
+            io.Out.WriteLine($"log:       {WatchFiles.Log(ConfigDirectory)}");
+            foreach (var line in log.Tail(5)) io.Out.WriteLine($"             {line}");
+            if (!running) io.Out.WriteLine(installed ? "Start it with: keyturn watch start" : "Set it up with: keyturn watch install");
+        }
+        return running ? Ok : NotRunning;
     }
 
     // ---- output ----------------------------------------------------------------------------
@@ -310,11 +440,13 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
               remove <name>
               run -s NAME[=ENV] ... [--refresh] [--allow-stale] -- cmd ...
                                                 run cmd with secrets in its environment
-              schedule install [--app PATH]     launch the prompt at login and hourly (--print to preview)
-              schedule uninstall
+              watch install [--app PATH]        start the background watcher at login and now (--print to preview)
+              watch uninstall                   stop it and remove it from your login items
+              watch start | stop                start or stop it now
+              watch status [--json]             is it running, what expires next, what is snoozed (exit 2 if not running)
               --version
 
-            exit codes: 0 ok, 1 usage/unknown secret, 2 no value, 3 stale, 4 storage error
+            exit codes: 0 ok, 1 usage/unknown secret, 2 no value (watch status: not running), 3 stale, 4 storage error
             """);
         return code;
     }

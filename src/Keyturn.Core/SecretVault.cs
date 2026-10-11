@@ -26,8 +26,14 @@ public sealed class SecretVault
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "keyturn"),
         "secrets.json");
 
-    /// <summary>The definitions file; its directory also holds per-secret refresh locks.</summary>
+    /// <summary>The definitions file.</summary>
     public string ConfigPath => _configPath;
+
+    /// <summary>Its directory also holds the refresh locks, the snooze file and the watcher's lock, pid, stop and log files.</summary>
+    public string ConfigDirectory => Path.GetDirectoryName(_configPath)!;
+
+    /// <summary>The lock held while a prompt for this secret is open, so only one window ever asks for it.</summary>
+    public string RefreshLockPath(string name) => Path.Combine(ConfigDirectory, $"refresh-{name}.lock");
 
     public IReadOnlyList<SecretDefinition> List() => Load();
 
@@ -40,6 +46,26 @@ public sealed class SecretVault
     public IReadOnlyList<SecretStatus> Statuses() => Load().Select(StatusOf).ToList();
 
     public IReadOnlyList<SecretStatus> Due() => Statuses().Where(s => s.NeedsAttention).ToList();
+
+    /// <summary>
+    /// What is due according to the definitions alone (never set, or past its schedule). Unlike <see cref="Due"/> it never
+    /// reads the credential store, so the watcher can call it every few seconds without touching the keyring.
+    /// </summary>
+    public IReadOnlyList<SecretStatus> Expired()
+    {
+        var now = _now();
+        return Load().Select(d => FromDefinition(d, now)).Where(s => s.NeedsAttention).ToList();
+    }
+
+    /// <summary>The fresh secret that goes stale first, or null when nothing is scheduled to.</summary>
+    public SecretStatus? NextToExpire()
+    {
+        var now = _now();
+        return Load().Select(d => FromDefinition(d, now)).Where(s => s.State == SecretState.Fresh).MinBy(s => s.ExpiresAt);
+    }
+
+    /// <summary>The moment the next fresh secret goes stale, or null when nothing is scheduled to.</summary>
+    public DateTimeOffset? NextExpiry() => NextToExpire()?.ExpiresAt;
 
     /// <summary>Defines a new secret, or updates the schedule/description of an existing one.</summary>
     public SecretDefinition Define(string name, string schedule, string? description = null)
@@ -90,6 +116,13 @@ public sealed class SecretVault
         _backend.Remove(name);
         Save(all);
         return true;
+    }
+
+    SecretStatus FromDefinition(SecretDefinition def, DateTimeOffset now)
+    {
+        if (def.LastSetAt is not { } lastSet) return new SecretStatus(def, SecretState.Missing, null);
+        var expires = def.ParsedSchedule.ExpiresAfter(lastSet);
+        return new SecretStatus(def, now >= expires ? SecretState.Stale : SecretState.Fresh, expires);
     }
 
     SecretStatus StatusOf(SecretDefinition def)

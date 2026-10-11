@@ -68,29 +68,3 @@ public class AppLocatorTests
     public void WindowsLooksForTheExe() =>
         Assert.Equal(P(Base, "Keyturn.App.exe"), AppLocator.Find(Base, true, false, fileExists: p => p.EndsWith("Keyturn.App.exe")));
 }
-
-public class LaunchAgentTests
-{
-    [Fact]
-    public void PlistIsWellFormedAndRunsTheBundleExecutableDirectly()
-    {
-        var app = "/Users/me/Applications/Keyturn.app/Contents/MacOS/Keyturn.App";
-        var plist = XDocument.Parse(Scheduler.MacLaunchAgent(app).Replace("<!DOCTYPE", "<!--").Replace("dtd\">", "dtd\"-->")); // the DTD is Apple's; no network in tests
-        var dict = plist.Root!.Element("dict")!;
-        string Value(string key) => ((XElement)dict.Elements("key").First(k => k.Value == key).NextNode!).Value;
-
-        Assert.Equal("com.antoinepoulin.keyturn.prompt", Value("Label"));
-        Assert.Equal(app, ((XElement)dict.Elements("key").First(k => k.Value == "ProgramArguments").NextNode!).Elements("string").Single().Value);
-        Assert.Equal("3600", Value("StartInterval"));
-        Assert.Equal("Aqua", Value("LimitLoadToSessionType")); // GUI sessions only, never over SSH
-        Assert.Equal("com.antoinepoulin.keyturn", ((XElement)dict.Elements("key").First(k => k.Value == "AssociatedBundleIdentifiers").NextNode!).Elements("string").Single().Value);
-    }
-
-    [Fact]
-    public void PathsWithXmlSpecialCharactersAreEscaped()
-    {
-        var plist = Scheduler.MacLaunchAgent("/Users/a&b/<x>/Keyturn.App");
-        Assert.Contains("a&amp;b", plist);
-        Assert.Contains("&lt;x&gt;", plist);
-    }
-}

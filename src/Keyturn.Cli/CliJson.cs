@@ -7,15 +7,23 @@ internal sealed record SecretDto(string Name, string Schedule, string? Descripti
 
 internal sealed record GetDto(string Name, string State, DateTimeOffset? ExpiresAt, string Value);
 
+internal sealed record NextExpiryDto(string Name, DateTimeOffset At);
+
+internal sealed record SnoozedDto(string Name, DateTimeOffset Until);
+
+internal sealed record WatchStatusDto(bool Installed, bool Running, int? Pid, DateTimeOffset? Since, NextExpiryDto? Next, List<SnoozedDto> Snoozed, string Log);
+
 // Source-generated, so it survives trimming. Two contexts because indentation is fixed at generation time.
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(SecretDto))]
 [JsonSerializable(typeof(List<SecretDto>))]
 [JsonSerializable(typeof(GetDto))]
+[JsonSerializable(typeof(WatchStatusDto))]
 internal partial class IndentedJson : JsonSerializerContext;
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = false)]
 [JsonSerializable(typeof(SecretDto))]
 [JsonSerializable(typeof(List<SecretDto>))]
 [JsonSerializable(typeof(GetDto))]
+[JsonSerializable(typeof(WatchStatusDto))]
 internal partial class CompactJson : JsonSerializerContext;

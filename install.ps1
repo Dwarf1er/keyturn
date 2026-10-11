@@ -1,11 +1,12 @@
 # Builds Keyturn from this checkout and installs it for the current user (no administrator rights needed).
 #
-#   .\install.ps1              build and install
+#   .\install.ps1              build and install, and start the background watcher
 #   .\install.ps1 -Uninstall   uninstall
 #
 # Installs keyturn.exe and Keyturn.App.exe into %LOCALAPPDATA%\Programs\Keyturn, adds that folder to your user PATH,
-# and creates a Start Menu shortcut "Keyturn" (with the logo) that opens the manage window. Your secrets and config
-# are never touched. Prefer a prebuilt binary? Download the Windows archive from the Releases page.
+# and creates a Start Menu shortcut "Keyturn" (with the logo) that opens the manage window. It also sets up the
+# background watcher that pops the prompt up when a secret expires (a Task Scheduler task that starts at logon) and
+# starts it. Your secrets and config are never touched. Prefer a prebuilt binary? Download the Windows archive from the Releases page.
 param(
     [string]$Configuration = "Release",
     [switch]$Uninstall,
@@ -49,9 +50,9 @@ function Get-PathEntry([string]$PathValue) {
 }
 
 if ($Uninstall) {
-    # Remove the scheduled prompt first, while the CLI that knows how still exists.
+    # Stop the watcher and remove it from the login items first, while the CLI that knows how still exists.
     if (Test-Path -LiteralPath $cliExe) {
-        try { & $cliExe schedule uninstall 2>&1 | Out-Null } catch { Write-Verbose "no scheduled prompt to remove: $_" }
+        try { & $cliExe watch uninstall 2>&1 | Out-Null } catch { Write-Verbose "no watcher to remove: $_" }
     }
     if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
     if ($shortcut -and (Test-Path -LiteralPath $shortcut)) { Remove-Item -LiteralPath $shortcut -Force }
@@ -84,6 +85,11 @@ try {
         $csproj = Join-Path (Join-Path (Join-Path $PSScriptRoot "src") $project) "$project.csproj"
         dotnet publish $csproj -c $Configuration -r $rid "-p:PublishProfile=release" "-p:Version=$version" --nologo -v q -o (Join-Path $tmp $project)
         if ($LASTEXITCODE -ne 0) { throw "building $project failed" }
+    }
+
+    # A running watcher would keep running the old version after an upgrade, so stop it before replacing anything.
+    if (Test-Path -LiteralPath $cliExe) {
+        try { & $cliExe watch stop 2>&1 | Out-Null } catch { Write-Verbose "no watcher to stop: $_" }
     }
 
     # A running exe can be renamed but not overwritten: move the old one aside, then copy the new one in.
@@ -121,9 +127,19 @@ else {
     Say "$installDir is already on your PATH."
 }
 
+# Set up the watcher (a logon task) and start it. Not fatal: Keyturn works without it, it just can't prompt by itself.
+$watcherSetUp = $false
+try {
+    & $cliExe watch install 2>&1 | ForEach-Object { Say "$_" }
+    $watcherSetUp = ($LASTEXITCODE -eq 0)
+}
+catch { Write-Warning "couldn't set up the background watcher: $_" }
+if (-not $watcherSetUp) { Write-Warning "couldn't set up the background watcher. Try again later with: keyturn watch install" }
+
 Say ""
 Say "Keyturn installed:"
 Say "  $cliExe"
 Say "  $appExe (and a `"Keyturn`" Start Menu shortcut)"
 Say ""
+if ($watcherSetUp) { Say "The background watcher is set up: Keyturn will pop up as soon as a secret expires. See it with: keyturn watch status" }
 Say "Next: keyturn add vpn daily@06:00 `"Corporate VPN password`"   (see the README's Quickstart)"
