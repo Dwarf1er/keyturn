@@ -28,6 +28,7 @@ dir holds names, schedules and last-set times, never values.
 
 * [What's included](#whats-included)
 * [Installation](#installation)
+  * [From source](#from-source)
 * [Quickstart](#quickstart)
 * [Schedules](#schedules)
 * [Using secrets from your tools](#using-secrets-from-your-tools)
@@ -69,18 +70,67 @@ Verify with `sha256sum -c SHA256SUMS`. Each archive holds two single files and n
 
 * **`keyturn`** (CLI): a ~3 MB NativeAOT binary that starts in milliseconds, since other tools call it.
 * **`Keyturn.App`**: a ~20 MB self-contained file with its Skia and HarfBuzz native libraries embedded. No .NET
-  install needed. On first launch .NET unpacks those libraries into a per-user folder (`~/.net/Keyturn.App/` on
+  install needed. On macOS it is `Keyturn.app`, a bundle with the Keyturn icon, signed ad hoc. On first launch .NET unpacks those libraries into a per-user folder (`~/.net/Keyturn.App/` on
   Linux and macOS, `%TEMP%\.net\Keyturn.App\` on Windows), which is safe to delete. Launching takes roughly
   150 ms longer than the CLI; a scheduled launch with nothing due still exits without opening a window.
 
 A few things to know:
 
-* **The binaries are not code-signed.** macOS Gatekeeper will quarantine them (`xattr -dr com.apple.quarantine .`
-  after unpacking) and Windows SmartScreen will warn.
+* **The binaries are not code-signed**, and on macOS the app is only signed ad hoc, not notarized (that needs a paid
+  Apple Developer ID). Gatekeeper will quarantine what you download: after unpacking, run
+  `xattr -dr com.apple.quarantine .` in the folder. Windows SmartScreen will warn too.
+* **macOS:** needs macOS 12 or later (the binaries declare 12 as their minimum; Microsoft's support policy for
+  .NET 10 covers macOS 15 and later). `Keyturn.app` is a normal Dock app: it shows in the Dock and Cmd-Tab while a
+  prompt or the manage window is open, and the hourly check that finds nothing due exits before any window exists,
+  so it never shows up. The first time the app reads a secret the CLI stored (or the other way round), macOS asks
+  whether to allow keychain access; choose Always Allow. The ad-hoc signature changes with every build, so expect to
+  be asked again after an upgrade.
 * **Linux:** the app needs a graphical session and the usual desktop libraries (fontconfig, freetype). The
   binaries link against the glibc of the machine that built them; each release's build summary reports the
   minimum version for both files (the app's runtime baseline is much older than the CLI's NativeAOT build). The
   CLI works headless apart from `--refresh`.
+
+### From source
+
+Prefer to build it yourself? Clone the repo and run the installer (needs the [.NET 10 SDK](https://dotnet.microsoft.com/download)).
+
+On Linux and macOS:
+
+```bash
+git clone https://github.com/Dwarf1er/keyturn.git
+cd keyturn
+./install.sh
+```
+
+On Windows, from PowerShell:
+
+```powershell
+git clone https://github.com/Dwarf1er/keyturn.git
+cd keyturn
+.\install.ps1
+```
+
+Both build the CLI and the app and install them for the current user without administrator rights: the binaries go to
+`~/.local/bin` (`%LOCALAPPDATA%\Programs\Keyturn` on Windows). Each also adds a launcher with the Keyturn icon that
+opens the manage window: an application-menu entry on Linux, `Keyturn.app` in `~/Applications` on macOS (find it with
+Spotlight or Launchpad), a Start Menu shortcut on Windows. On Windows the icon is also embedded in both executables.
+
+| `install.sh` | `install.ps1` | |
+| --- | --- | --- |
+| `--prefix DIR` | `-Prefix DIR` | Where the binaries go. |
+| `--schedule` | `-Schedule` | Also run `keyturn schedule install`. |
+| `--no-launcher` | `-NoShortcut` | Skip the menu entry or shortcut (macOS: keep `Keyturn.app` beside the CLI). |
+| `--app-dir DIR` | | macOS only: where `Keyturn.app` goes (default `~/Applications`). |
+| `--jit` | `-Jit` | Build the CLI without NativeAOT (see below). |
+| `--uninstall` | `-Uninstall` | Remove what the installer put there. Your secrets and config are never touched. |
+
+The CLI is built with NativeAOT, which needs a native toolchain: `clang`, the zlib headers and `binutils` on Linux,
+the Xcode command line tools (`xcode-select --install`) on macOS, or the "Desktop development with C++" workload of
+the Visual Studio Build Tools on Windows. If it's missing, the
+installer says what to install and falls back to a self-contained CLI instead of failing: about 15 MB and 70 ms to
+start, against 3 MB and 3 ms. It's otherwise identical.
+
+The release archives are bare binaries, so on Linux the application-menu entry comes from `install.sh`.
 
 ## Quickstart
 
@@ -208,8 +258,8 @@ Scheduler; `--print` previews). The app exits instantly, with no window, unless 
 * **Linux** needs a Secret Service provider (GNOME Keyring, KWallet, KeePassXC, oo7), libsecret, and an
   unlocked keyring. There is no fallback for headless machines yet. `--refresh` needs a graphical session.
 * **Windows** limits a secret to 1,280 characters.
-* **macOS and Windows have not been run yet.** They build for every target, but the store code has only been
-  exercised on Linux. Expect the first real run to need fixes.
+* **macOS and Windows are newer than Linux.** CI builds, installs and smoke-tests both on real runners, but the
+  credential-store code itself has only been exercised by hand on Linux so far. Expect rough edges.
 * Secrets pass through managed strings and live in process memory briefly; this protects secrets at rest and
   from other users, not from malware running as you.
 
@@ -232,7 +282,9 @@ scripts/smoke.sh dist/keyturn 1.0.0
 ```
 
 Neither NativeAOT nor the self-contained build cross-compiles between operating systems, which is why CI uses one
-runner per OS.
+runner per OS. The build flags live in each project's publish profiles (`src/*/Properties/PublishProfiles`), shared by
+`scripts/publish.sh`, the installers and CI. `scripts/make-icons.sh` regenerates the icons in `assets/` from
+`assets/keyturn-mark.svg`.
 
 ### Releasing
 

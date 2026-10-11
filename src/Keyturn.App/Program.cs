@@ -41,6 +41,8 @@ class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            // The X11 window class is what a Linux desktop matches against a launcher's StartupWMClass to pick its icon.
+            .With(new X11PlatformOptions { WmClass = "Keyturn.App" })
             .WithInterFont()
             .LogToTrace();
 }

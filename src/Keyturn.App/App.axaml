@@ -101,11 +101,6 @@
             <!-- Flatten Fluent's thicker focused bottom border; focus is shown by colour alone. -->
             <Thickness x:Key="TextControlBorderThemeThicknessFocused">1</Thickness>
 
-            <LinearGradientBrush x:Key="LogoGradient" StartPoint="0%,0%" EndPoint="100%,100%">
-                <GradientStop Color="#9B7CFF" Offset="0" />
-                <GradientStop Color="#4C7DFF" Offset="1" />
-            </LinearGradientBrush>
-            <BoxShadows x:Key="LogoGlow">0 6 20 -2 #667C5CFF</BoxShadows>
         </ResourceDictionary>
     </Application.Resources>
 
@@ -114,6 +109,8 @@
 
         <!-- Surfaces -->
         <Style Selector="Window">
+            <!-- Every window gets the app icon (title bar, taskbar, X11 icon hint), including any added later. -->
+            <Setter Property="Icon" Value="/Assets/keyturn.png" />
             <Setter Property="Background" Value="{DynamicResource Bg}" />
             <Setter Property="Foreground" Value="{DynamicResource Text}" />
             <Setter Property="FontSize" Value="14" />
@@ -125,13 +122,6 @@
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Padding" Value="18" />
             <Setter Property="BoxShadow" Value="{DynamicResource CardShadow}" />
-        </Style>
-        <Style Selector="Border.logo">
-            <Setter Property="Width" Value="42" />
-            <Setter Property="Height" Value="42" />
-            <Setter Property="CornerRadius" Value="12" />
-            <Setter Property="Background" Value="{StaticResource LogoGradient}" />
-            <Setter Property="BoxShadow" Value="{StaticResource LogoGlow}" />
         </Style>
         <Style Selector="Border.divider">
             <Setter Property="Height" Value="1" />

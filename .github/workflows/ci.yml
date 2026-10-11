@@ -1,0 +1,238 @@
+name: ci
+
+# Tests on every push and pull request (including Dependabot's), and proves the from-source installers work on
+# real machines: the Linux one on Ubuntu, the Windows one on Windows, the macOS one on macOS, including the parts
+# that can't be tested anywhere else (Windows: user PATH, Start Menu shortcut, the icon in the NativeAOT exe;
+# macOS: the bundle, its ad-hoc signature and its icon file). Whether the Dock icon actually *shows* needs a person.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test -c Release
+
+  install-linux:
+    name: install.sh (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PREFIX: ${{ github.workspace }}/.install-test/prefix
+      XDG_DATA_HOME: ${{ github.workspace }}/.install-test/xdg
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: Install prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev desktop-file-utils
+
+      - name: Install from source (NativeAOT CLI)
+        run: ./install.sh --prefix "$PREFIX"
+
+      - name: Verify the install
+        run: |
+          set -euo pipefail
+          "$PREFIX/bin/keyturn" --version
+          "$PREFIX/bin/Keyturn.App" --self-test
+          desktop-file-validate "$XDG_DATA_HOME/applications/keyturn.desktop"
+          test -f "$XDG_DATA_HOME/icons/hicolor/256x256/apps/keyturn.png"
+          test -f "$XDG_DATA_HOME/icons/hicolor/scalable/apps/keyturn.svg"
+          size=$(stat -c %s "$PREFIX/bin/keyturn")
+          echo "CLI is $((size / 1024 / 1024)) MB"
+          [ "$size" -lt 8000000 ] || { echo "::error::the CLI looks like the non-AOT build ($size bytes)"; exit 1; }
+
+      - name: Uninstall and verify nothing is left
+        run: |
+          set -euo pipefail
+          ./install.sh --prefix "$PREFIX" --uninstall
+          # Not "! test -e": a negated command is exempt from set -e, so that could never fail.
+          [ ! -e "$PREFIX/bin/keyturn" ]
+          [ ! -e "$XDG_DATA_HOME/applications/keyturn.desktop" ]
+          [ ! -e "$XDG_DATA_HOME/keyturn/install-manifest" ]
+
+      - name: Install with the fallback build (--jit)
+        run: |
+          set -euo pipefail
+          ./install.sh --prefix "$PREFIX" --jit --no-launcher
+          "$PREFIX/bin/keyturn" --version
+          [ ! -e "$XDG_DATA_HOME/applications/keyturn.desktop" ]
+          ./install.sh --prefix "$PREFIX" --uninstall
+
+  install-windows:
+    name: install.ps1 (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PREFIX: ${{ github.workspace }}\.install-test\prefix
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install from source
+        shell: pwsh
+        run: ./install.ps1 -Prefix $env:PREFIX
+
+      - name: Verify the install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cli = Join-Path $env:PREFIX 'keyturn.exe'
+          $app = Join-Path $env:PREFIX 'Keyturn.App.exe'
+          foreach ($f in $cli, $app) { if (-not (Test-Path $f)) { throw "missing $f" } }
+
+          # The CLI should be the small NativeAOT build (the runner has the C++ tools), not the fallback.
+          $mb = [math]::Round((Get-Item $cli).Length / 1MB, 1)
+          Write-Host "CLI is $mb MB"
+          if ((Get-Item $cli).Length -gt 8MB) { throw "the CLI looks like the non-AOT build ($mb MB)" }
+
+          # The icon is embedded in both executables. This is the check for the NativeAOT one.
+          foreach ($f in $cli, $app) {
+            $result = ./scripts/check-icon.ps1 $f
+            if ($LASTEXITCODE -ne 0) { throw "no icon embedded in ${f}: $result" }
+            Write-Host "$(Split-Path $f -Leaf): $result"
+          }
+
+          & $cli --version
+          if ($LASTEXITCODE -ne 0) { throw "keyturn --version failed" }
+          # Keyturn.App.exe is a GUI-subsystem program, so wait for it explicitly to get its exit code.
+          $p = Start-Process -FilePath $app -ArgumentList '--self-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Keyturn.App --self-test exited with $($p.ExitCode)" }
+
+          # Start Menu shortcut, using the app's embedded icon.
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Keyturn.lnk'
+          if (-not (Test-Path $lnk)) { throw "missing Start Menu shortcut $lnk" }
+          $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+          Write-Host "shortcut -> $($shortcut.TargetPath) $($shortcut.Arguments), icon $($shortcut.IconLocation)"
+          if ($shortcut.TargetPath -ne $app -or $shortcut.IconLocation -ne "$app,0") { throw "shortcut points at the wrong target or icon" }
+
+          # User PATH.
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
+          if ($userPath -notcontains $env:PREFIX) { throw "$env:PREFIX is not on the user PATH" }
+
+      - name: Uninstall and verify nothing is left
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./install.ps1 -Prefix $env:PREFIX -Uninstall
+          if (Test-Path (Join-Path $env:PREFIX 'keyturn.exe')) { throw 'keyturn.exe is still installed' }
+          if (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Keyturn.lnk')) { throw 'the shortcut is still there' }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
+          if ($userPath -contains $env:PREFIX) { throw 'the install folder is still on the user PATH' }
+
+      - name: Install with the fallback build (-Jit)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./install.ps1 -Prefix $env:PREFIX -Jit -NoShortcut
+          & (Join-Path $env:PREFIX 'keyturn.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'keyturn --version failed' }
+          ./install.ps1 -Prefix $env:PREFIX -Uninstall
+
+  install-macos:
+    name: install.sh (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      PREFIX: ${{ github.workspace }}/.install-test/prefix
+      XDG_DATA_HOME: ${{ github.workspace }}/.install-test/xdg
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      # Default app dir (~/Applications): the CLI has to find the bundle there, which is part of what's tested.
+      - name: Install from source (NativeAOT CLI)
+        run: ./install.sh --prefix "$PREFIX"
+
+      - name: Verify the bundle
+        run: |
+          set -euo pipefail
+          bundle="$HOME/Applications/Keyturn.app"
+          exe="$bundle/Contents/MacOS/Keyturn.App"
+          plist="$bundle/Contents/Info.plist"
+
+          [ -x "$exe" ]
+          [ -f "$plist" ]
+          [ -f "$bundle/Contents/Resources/keyturn.icns" ]
+          plutil -lint "$plist"
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "com.antoinepoulin.keyturn" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist")" = "keyturn" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")" = "Keyturn.App" ]
+          # A normal Dock app: LSUIElement must NOT be set.
+          if /usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$plist" >/dev/null 2>&1; then echo "::error::LSUIElement is set"; exit 1; fi
+
+          # The icon file is a valid iconset (Apple's own tool is the judge).
+          iconutil --convert iconset --output "$RUNNER_TEMP/keyturn.iconset" "$bundle/Contents/Resources/keyturn.icns"
+          count=$(ls "$RUNNER_TEMP/keyturn.iconset" | wc -l | tr -d ' ')
+          echo "iconset has $count images"
+          [ "$count" -ge 10 ]
+
+          # Ad-hoc signed and intact.
+          codesign --verify --strict --verbose=2 "$bundle"
+          codesign -dv "$bundle" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          grep -q "Identifier=com.antoinepoulin.keyturn" "$RUNNER_TEMP/codesign.txt"
+          grep -q "Signature=adhoc" "$RUNNER_TEMP/codesign.txt"
+
+          [ "$(lipo -archs "$exe")" = "arm64" ]
+          size=$(stat -f %z "$PREFIX/bin/keyturn")
+          echo "CLI is $((size / 1024 / 1024)) MB"
+          [ "$size" -lt 8000000 ] || { echo "::error::the CLI looks like the non-AOT build ($size bytes)"; exit 1; }
+
+      - name: Verify it runs
+        run: |
+          set -euo pipefail
+          exe="$HOME/Applications/Keyturn.app/Contents/MacOS/Keyturn.App"
+          "$PREFIX/bin/keyturn" --version
+          "$exe" --self-test
+          # The CLI finds the bundle in ~/Applications and would run the inner binary directly from launchd.
+          "$PREFIX/bin/keyturn" schedule install --print | tee "$RUNNER_TEMP/launchd.plist"
+          grep -qF "$exe" "$RUNNER_TEMP/launchd.plist"
+          # The first line of --print output is a "# path" comment; the rest must be a valid plist.
+          sed 1d "$RUNNER_TEMP/launchd.plist" > "$RUNNER_TEMP/launchd-clean.plist"
+          plutil -lint "$RUNNER_TEMP/launchd-clean.plist"
+
+      - name: Uninstall and verify nothing is left
+        run: |
+          set -euo pipefail
+          ./install.sh --prefix "$PREFIX" --uninstall
+          [ ! -e "$HOME/Applications/Keyturn.app" ]
+          [ ! -e "$PREFIX/bin/keyturn" ]
+          [ ! -e "$XDG_DATA_HOME/keyturn/install-manifest" ]
+
+      - name: Install with the fallback build (--jit), bundle beside the CLI
+        run: |
+          set -euo pipefail
+          ./install.sh --prefix "$PREFIX" --jit --no-launcher
+          "$PREFIX/bin/keyturn" --version
+          [ -x "$PREFIX/bin/Keyturn.app/Contents/MacOS/Keyturn.App" ]
+          [ ! -e "$HOME/Applications/Keyturn.app" ]
+          # `keyturn` must find a bundle sitting beside it.
+          "$PREFIX/bin/keyturn" schedule install --print >/dev/null
+          ./install.sh --prefix "$PREFIX" --uninstall

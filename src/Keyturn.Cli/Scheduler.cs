@@ -9,7 +9,9 @@ namespace Keyturn;
 /// </summary>
 static class Scheduler
 {
-    const string Id = "org.keyturn.prompt";
+    // launchd label and bundle id share the author's reverse-DNS domain (the bundle id is set in scripts/make-macos-app.sh).
+    const string Id = "com.antoinepoulin.keyturn.prompt";
+    const string BundleId = "com.antoinepoulin.keyturn";
 
     public static int Install(string appPath, bool printOnly)
     {
@@ -90,9 +92,8 @@ static class Scheduler
         return rc;
     }
 
-    static int Mac(string app, bool printOnly)
-    {
-        var plist = $"""
+    internal static string MacLaunchAgent(string app) =>
+        $"""
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0"><dict>
@@ -101,8 +102,14 @@ static class Scheduler
               <key>RunAtLoad</key><true/>
               <key>StartInterval</key><integer>3600</integer>
               <key>ProcessType</key><string>Interactive</string>
+              <key>LimitLoadToSessionType</key><string>Aqua</string>
+              <key>AssociatedBundleIdentifiers</key><array><string>{BundleId}</string></array>
             </dict></plist>
             """;
+
+    static int Mac(string app, bool printOnly)
+    {
+        var plist = MacLaunchAgent(app);
         if (printOnly) { Console.WriteLine($"# {MacPlist}\n{plist}"); return 0; }
 
         Directory.CreateDirectory(Path.GetDirectoryName(MacPlist)!);

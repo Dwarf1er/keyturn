@@ -131,6 +131,20 @@ jobs:
             echo "- ${{ matrix.rid }} \`$bin\` needs ${floor} or newer" >> "$GITHUB_STEP_SUMMARY"
           done
 
+      # The Intel build is cross-compiled on an arm64 runner and can't be run there, so check what it really is.
+      - name: Verify the macOS bundle's architecture
+        if: runner.os == 'macOS'
+        run: |
+          expected=arm64
+          [ "${{ matrix.rid }}" = "osx-x64" ] && expected=x86_64
+          actual=$(lipo -archs "dist/$NAME/Keyturn.app/Contents/MacOS/Keyturn.App")
+          echo "${{ matrix.rid }}: expected $expected, bundle is $actual"
+          [ "$actual" = "$expected" ]
+          actual=$(lipo -archs "dist/$NAME/keyturn")
+          echo "CLI: expected $expected, is $actual"
+          [ "$actual" = "$expected" ]
+          codesign --verify --strict "dist/$NAME/Keyturn.app"
+
       - name: Archive (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"

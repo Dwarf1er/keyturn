@@ -12,6 +12,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>
+    <ApplicationIcon>..\..\assets\keyturn.ico</ApplicationIcon>
     <!-- No ICU dependency (servers, containers) and locale-independent output for scripts. -->
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>

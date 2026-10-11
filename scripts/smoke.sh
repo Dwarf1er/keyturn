@@ -26,8 +26,14 @@ exit_is() { # exit_is <code> <command...>
 export KEYTURN_CONFIG_DIR
 KEYTURN_CONFIG_DIR=$(mktemp -d)
 
+# On macOS the app is a bundle; everywhere else it is a single file beside the CLI.
+app="$dir/Keyturn.App$ext"
+bundle_exe="$dir/Keyturn.app/Contents/MacOS/Keyturn.App"
+[ -f "$bundle_exe" ] && app=$bundle_exe
+
 check "keyturn$ext exists"             test -f "$k"
-check "Keyturn.App$ext exists"         test -f "$dir/Keyturn.App$ext"
+check "the app exists"                 test -f "$app"
+check "keyturn can locate the app"     exit_is 0 "$k" schedule install --print
 check "--version is $version"          test "$("$k" --version)" = "$version"
 check "add defines a secret"           exit_is 0 "$k" add smoke 12h "ci smoke"
 check "list --json shows it"           bash -c "\"$k\" list --json | grep -q '\"name\":\"smoke\"'"
@@ -36,13 +42,24 @@ check "status of unknown exits 1"      exit_is 1 "$k" status nope
 check "due exits 3 when due"           exit_is 3 "$k" due
 
 # The app, against an empty config: nothing is due, so it must exit 0 without opening a window.
-app_silent() { KEYTURN_CONFIG_DIR=$(mktemp -d) "$dir/Keyturn.App$ext"; }
+app_silent() { KEYTURN_CONFIG_DIR=$(mktemp -d) "$app"; }
 app_selftest() {
   local log; log=$(mktemp)
-  KEYTURN_SELFTEST_LOG=$log "$dir/Keyturn.App$ext" --self-test >/dev/null 2>&1 || { cat "$log" 2>/dev/null; return 1; }
+  KEYTURN_SELFTEST_LOG=$log "$app" --self-test >/dev/null 2>&1 || { cat "$log" 2>/dev/null; return 1; }
 }
 check "app exits silently when nothing is due"        exit_is 0 app_silent
 check "app's bundled Skia/HarfBuzz natives load"      app_selftest
+
+if [ -f "$bundle_exe" ]; then
+  echo "-- macOS bundle"
+  b="$dir/Keyturn.app"
+  check "Info.plist is present"               test -f "$b/Contents/Info.plist"
+  check "the icon is present"                 test -f "$b/Contents/Resources/keyturn.icns"
+  check "no loose bare executable beside it"  test ! -e "$dir/Keyturn.App"
+  if command -v codesign >/dev/null 2>&1; then
+    check "the bundle's signature verifies"   codesign --verify --strict "$b"
+  fi
+fi
 
 if [ "$mode" = "store" ]; then
   echo "-- credential store round trip"

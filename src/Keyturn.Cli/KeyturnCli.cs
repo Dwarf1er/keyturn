@@ -236,7 +236,11 @@ public sealed class KeyturnCli(SecretVault vault, CliIo io, IPromptLauncher prom
         switch (a.Positional(0, "schedule install [--app PATH] [--print] | uninstall"))
         {
             case "install":
-                var app = a.Option("--app") ?? Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "Keyturn.App.exe" : "Keyturn.App");
+                var explicitApp = a.Option("--app");
+                var app = AppLocator.Find(explicitApp)
+                    ?? throw new ArgumentException(explicitApp is null
+                        ? "can't find the Keyturn app. Put it next to the keyturn CLI (on macOS: Keyturn.app beside it, or in ~/Applications), or pass --app PATH."
+                        : $"App not found: {explicitApp}");
                 return Scheduler.Install(app, a.Flag("--print"));
             case "uninstall":
                 return Scheduler.Uninstall();

@@ -82,11 +82,7 @@ public sealed class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Children = { new TextBlock { Text = _manage ? "Keyturn" : "Refresh your secrets", Classes = { "title" } }, _subtitle },
         };
-        var logo = new Border { Classes = { "logo" }, Child = Icons.Create(Icons.Key, 22, "white") };
-        logo.Child!.HorizontalAlignment = HorizontalAlignment.Center;
-        logo.Child.VerticalAlignment = VerticalAlignment.Center;
-
-        var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, Children = { logo, titleBlock } };
+        var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, Children = { AppLogo.Create(48), titleBlock } };
         if (!_manage) return left;
 
         var add = new Button

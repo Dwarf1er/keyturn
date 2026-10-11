@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Publishes the CLI (NativeAOT, one native file) and the app (trimmed self-contained single file, with Skia and
-# HarfBuzz embedded and extracted by the .NET host on first run) for one runtime into a staging directory.
+# Publishes the CLI (NativeAOT) and the app (trimmed self-contained single file) for one runtime into a staging
+# directory, using each project's `release` publish profile (see src/*/Properties/PublishProfiles).
 # Usage: scripts/publish.sh <rid> <version> <staging-dir>
 # NativeAOT can't cross-compile between operating systems, so run this on the target OS.
 set -euo pipefail
@@ -14,19 +14,14 @@ log=$(mktemp)
 rm -rf "$out"
 mkdir -p "$out"
 
-publish() { # publish <project> <extra msbuild args...>
-  local project=$1; shift
+publish() { # publish <project>; the flags live in each project's Properties/PublishProfiles/release.pubxml
+  local project=$1
   echo "==> publishing $project ($rid, $version)"
-  dotnet publish "$root/src/$project" -c Release -r "$rid" -p:Version="$version" -p:DebugType=none --nologo -o "$out" "$@" 2>&1 | tee -a "$log"
+  dotnet publish "$root/src/$project" -r "$rid" -p:PublishProfile=release -p:Version="$version" --nologo -o "$out" 2>&1 | tee -a "$log"
 }
 
-# The CLI is on other tools' hot path: NativeAOT gives a ~3 MB file that starts in milliseconds.
-publish Keyturn.Cli -p:PublishAot=true
-
-# NativeAOT can't embed native libraries (they'd land beside the exe), so the app uses a self-contained single
-# file instead. Compression is on: it halves the size at ~100 ms per launch, irrelevant for a human-facing prompt.
-publish Keyturn.App -p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-  -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true
+publish Keyturn.Cli
+publish Keyturn.App
 
 # An AOT/trim warning compiles fine and then breaks at runtime (reflection-based JSON did exactly that).
 if grep -E "warning IL[0-9]+" "$log" >/dev/null; then
@@ -34,6 +29,11 @@ if grep -E "warning IL[0-9]+" "$log" >/dev/null; then
   grep -E "warning IL[0-9]+" "$log" | sort -u >&2
   exit 1
 fi
+
+# macOS: the Dock and Finder only take an icon from an .app bundle, so wrap the app (and ad-hoc sign it on a Mac).
+case "$rid" in
+  osx-*) "$root/scripts/make-macos-app.sh" "$out" "$version" ;;
+esac
 
 # Debug symbols are tens of MB and not for end users.
 find "$out" \( -name '*.pdb' -o -name '*.dbg' -o -name '*.dSYM' \) -prune -exec rm -rf {} +

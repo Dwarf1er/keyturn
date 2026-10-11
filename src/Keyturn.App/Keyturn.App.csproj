@@ -8,11 +8,13 @@
     <PublishTrimmed>true</PublishTrimmed>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Windows: the exe icon (Explorer, Start Menu shortcut, taskbar). Ignored when targeting other OSes. -->
+    <ApplicationIcon>..\..\assets\keyturn.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('linux'))">
-    <!-- A NativeAOT binary won't start on Linux without libicu; Windows/macOS keep localized formats. -->
+    <!-- The runtime won't start on Linux without libicu unless globalization is invariant; Windows/macOS keep localized formats. -->
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
@@ -28,6 +30,11 @@
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The window icon, shared with the repo's icon set so there is only one copy. -->
+    <AvaloniaResource Include="..\..\assets\icons\keyturn-256.png" Link="Assets\keyturn.png" />
   </ItemGroup>
 
   <ItemGroup>

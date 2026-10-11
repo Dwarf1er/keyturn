@@ -25,7 +25,7 @@ public sealed class ProcessPromptLauncher : IPromptLauncher
         var app = FindApp();
         if (app is null)
         {
-            detail = "can't find the Keyturn app. Put it next to the keyturn CLI or set KEYTURN_APP to its path.";
+            detail = "can't find the Keyturn app. Put it next to the keyturn CLI (on macOS: Keyturn.app beside it, or in ~/Applications) or set KEYTURN_APP to its path.";
             return PromptOutcome.Unavailable;
         }
 
@@ -57,13 +57,5 @@ public sealed class ProcessPromptLauncher : IPromptLauncher
         }
     }
 
-    static string? FindApp()
-    {
-        if (Environment.GetEnvironmentVariable("KEYTURN_APP") is { Length: > 0 } explicitPath)
-            return File.Exists(explicitPath) ? explicitPath : null;
-
-        var name = OperatingSystem.IsWindows() ? "Keyturn.App.exe" : "Keyturn.App";
-        var beside = Path.Combine(AppContext.BaseDirectory, name);
-        return File.Exists(beside) ? beside : null;
-    }
+    static string? FindApp() => AppLocator.Find();
 }
