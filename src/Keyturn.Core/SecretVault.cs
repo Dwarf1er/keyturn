@@ -117,7 +117,7 @@ public sealed class SecretVault
     }
 }
 
-/// <summary>Source-generated serializer for secrets.json, so the file works under NativeAOT and trimming.</summary>
+/// <summary>Source-generated serializer for secrets.json, so the file works under trimming.</summary>
 [JsonSourceGenerationOptions(WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(List<SecretDefinition>))]
 internal partial class VaultJson : JsonSerializerContext;

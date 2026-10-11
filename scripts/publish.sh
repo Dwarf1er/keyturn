@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Publishes the CLI (NativeAOT) and the app (trimmed self-contained single file) for one runtime into a staging
-# directory, using each project's `release` publish profile (see src/*/Properties/PublishProfiles).
+# Publishes the CLI and the app (both trimmed, self-contained single files) for one runtime into a staging directory,
+# using each project's `release` publish profile (see src/*/Properties/PublishProfiles).
 # Usage: scripts/publish.sh <rid> <version> <staging-dir>
-# NativeAOT can't cross-compile between operating systems, so run this on the target OS.
+# Run it on the target OS: CI smoke-tests the result by running it, and macOS bundles are signed on macOS.
 set -euo pipefail
 
 rid=${1:?runtime identifier, e.g. linux-x64}
@@ -23,9 +23,9 @@ publish() { # publish <project>; the flags live in each project's Properties/Pub
 publish Keyturn.Cli
 publish Keyturn.App
 
-# An AOT/trim warning compiles fine and then breaks at runtime (reflection-based JSON did exactly that).
+# A trim warning compiles fine and then breaks at runtime (reflection-based JSON did exactly that).
 if grep -E "warning IL[0-9]+" "$log" >/dev/null; then
-  echo "error: AOT/trim warnings found; refusing to package:" >&2
+  echo "error: trim warnings found; refusing to package:" >&2
   grep -E "warning IL[0-9]+" "$log" | sort -u >&2
   exit 1
 fi

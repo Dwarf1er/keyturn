@@ -7,7 +7,7 @@ internal sealed record SecretDto(string Name, string Schedule, string? Descripti
 
 internal sealed record GetDto(string Name, string State, DateTimeOffset? ExpiresAt, string Value);
 
-// Source-generated (NativeAOT-safe). Two contexts because indentation is fixed at generation time.
+// Source-generated, so it survives trimming. Two contexts because indentation is fixed at generation time.
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(SecretDto))]
 [JsonSerializable(typeof(List<SecretDto>))]

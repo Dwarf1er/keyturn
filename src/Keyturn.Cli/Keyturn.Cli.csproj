@@ -11,7 +11,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PublishAot>true</PublishAot>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <ApplicationIcon>..\..\assets\keyturn.ico</ApplicationIcon>
     <!-- No ICU dependency (servers, containers) and locale-independent output for scripts. -->
     <InvariantGlobalization>true</InvariantGlobalization>

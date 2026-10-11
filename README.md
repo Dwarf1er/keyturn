@@ -51,7 +51,7 @@ dir holds names, schedules and last-set times, never values.
 
 | | |
 | --- | --- |
-| **`keyturn`** | The CLI and the supported way for other tools to get a secret. A ~3 MB NativeAOT binary that starts in milliseconds. |
+| **`keyturn`** | The CLI and the supported way for other tools to get a secret. A self-contained single file of about 15 MB, no .NET install needed. |
 | **`Keyturn.App`** | The prompt window for secrets that are due, built with Avalonia. `--manage` opens a window to add, edit and remove secrets. |
 | **`Keyturn.Core`** | The library behind both. |
 
@@ -68,11 +68,12 @@ Download the archive for your platform from the [Releases](../../releases) page 
 
 Verify with `sha256sum -c SHA256SUMS`. Each archive holds two single files and nothing else to install:
 
-* **`keyturn`** (CLI): a ~3 MB NativeAOT binary that starts in milliseconds, since other tools call it.
-* **`Keyturn.App`**: a ~20 MB self-contained file with its Skia and HarfBuzz native libraries embedded. No .NET
-  install needed. On macOS it is `Keyturn.app`, a bundle with the Keyturn icon, signed ad hoc. On first launch .NET unpacks those libraries into a per-user folder (`~/.net/Keyturn.App/` on
-  Linux and macOS, `%TEMP%\.net\Keyturn.App\` on Windows), which is safe to delete. Launching takes roughly
-  150 ms longer than the CLI; a scheduled launch with nothing due still exits without opening a window.
+* **`keyturn`** (CLI): a self-contained file of about 15 MB that takes about 70 ms to start, per call.
+* **`Keyturn.App`**: a self-contained file of about 20 MB with its Skia and HarfBuzz native libraries embedded. On
+  macOS it is `Keyturn.app`, a bundle with the Keyturn icon, signed ad hoc. On first launch .NET unpacks those
+  libraries into a per-user folder (`~/.net/Keyturn.App/` on Linux and macOS, `%TEMP%\.net\Keyturn.App\` on
+  Windows), which is safe to delete. Launching takes roughly 150 ms; a scheduled launch with nothing due still exits
+  without opening a window.
 
 A few things to know:
 
@@ -85,10 +86,9 @@ A few things to know:
   so it never shows up. The first time the app reads a secret the CLI stored (or the other way round), macOS asks
   whether to allow keychain access; choose Always Allow. The ad-hoc signature changes with every build, so expect to
   be asked again after an upgrade.
-* **Linux:** the app needs a graphical session and the usual desktop libraries (fontconfig, freetype). The
-  binaries link against the glibc of the machine that built them; each release's build summary reports the
-  minimum version for both files (the app's runtime baseline is much older than the CLI's NativeAOT build). The
-  CLI works headless apart from `--refresh`.
+* **Linux:** the app needs a graphical session and the usual desktop libraries (fontconfig, freetype). Both files
+  need glibc 2.27 or newer (roughly Ubuntu 18.04 or Debian 10); each release's build summary reports the exact
+  minimum. The CLI works headless apart from `--refresh`.
 
 ### From source
 
@@ -115,20 +115,10 @@ Both build the CLI and the app and install them for the current user without adm
 opens the manage window: an application-menu entry on Linux, `Keyturn.app` in `~/Applications` on macOS (find it with
 Spotlight or Launchpad), a Start Menu shortcut on Windows. On Windows the icon is also embedded in both executables.
 
-| `install.sh` | `install.ps1` | |
-| --- | --- | --- |
-| `--prefix DIR` | `-Prefix DIR` | Where the binaries go. |
-| `--schedule` | `-Schedule` | Also run `keyturn schedule install`. |
-| `--no-launcher` | `-NoShortcut` | Skip the menu entry or shortcut (macOS: keep `Keyturn.app` beside the CLI). |
-| `--app-dir DIR` | | macOS only: where `Keyturn.app` goes (default `~/Applications`). |
-| `--jit` | `-Jit` | Build the CLI without NativeAOT (see below). |
-| `--uninstall` | `-Uninstall` | Remove what the installer put there. Your secrets and config are never touched. |
-
-The CLI is built with NativeAOT, which needs a native toolchain: `clang`, the zlib headers and `binutils` on Linux,
-the Xcode command line tools (`xcode-select --install`) on macOS, or the "Desktop development with C++" workload of
-the Visual Studio Build Tools on Windows. If it's missing, the
-installer says what to install and falls back to a self-contained CLI instead of failing: about 15 MB and 70 ms to
-start, against 3 MB and 3 ms. It's otherwise identical.
+The installers build self-contained binaries, so the .NET SDK is all they need. `./install.sh -u` (or
+`.\install.ps1 -Uninstall`) removes everything they installed and never touches your secrets or config. `-c <config>`
+(`-Configuration`) picks the build configuration. A build from source reports its version as `0.0.0-src`. To have the
+prompt appear when a secret comes due, run `keyturn schedule install` afterwards.
 
 The release archives are bare binaries, so on Linux the application-menu entry comes from `install.sh`.
 
@@ -234,7 +224,7 @@ be shown, or the wait times out, `get` exits `2`/`3` as if `--refresh` hadn't be
 
 * It doesn't authenticate callers: any process running as you can run `keyturn get`. `run` puts the secret in
   the child's environment, where other processes of the same user can read it.
-* The CLI is a process per call (startup time not measured), and the `keyturn` binary must be on `PATH`.
+* The CLI is a process per call (about 70 ms to start), and the `keyturn` binary must be on `PATH`.
 * Reading the OS store directly bypasses the expiry check and is **not** a supported interface; the entry
   layout is an implementation detail and may change.
 
@@ -281,8 +271,8 @@ scripts/publish.sh linux-x64 1.0.0 dist/keyturn
 scripts/smoke.sh dist/keyturn 1.0.0
 ```
 
-Neither NativeAOT nor the self-contained build cross-compiles between operating systems, which is why CI uses one
-runner per OS. The build flags live in each project's publish profiles (`src/*/Properties/PublishProfiles`), shared by
+CI builds each platform on its own runner, because the smoke tests run the binaries and the macOS bundle is signed on
+macOS. The build flags live in each project's publish profiles (`src/*/Properties/PublishProfiles`), shared by
 `scripts/publish.sh`, the installers and CI. `scripts/make-icons.sh` regenerates the icons in `assets/` from
 `assets/keyturn-mark.svg`.
 

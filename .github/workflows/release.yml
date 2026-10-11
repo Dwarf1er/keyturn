@@ -1,8 +1,8 @@
 name: release
 
 # Push a tag like v1.2.3 (or v1.2.3-rc.1 for a prerelease) to test, build every platform and publish a GitHub
-# release. The CLI is a NativeAOT single file; the app is a trimmed self-contained single file with its native
-# libraries embedded (NativeAOT can't embed them). See scripts/publish.sh.
+# release. Both the CLI and the app are trimmed, self-contained single files (the app has its native libraries
+# embedded). See scripts/publish.sh.
 #
 # Runners: always the floating "-latest" labels. GitHub has no floating label for Linux arm64, so that one names
 # the newest image explicitly and needs a manual bump when a newer one appears.
@@ -100,12 +100,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # NativeAOT links with the platform toolchain. Windows (MSVC) and macOS (Xcode) runners have it.
-      - name: Install NativeAOT prerequisites (Linux, for the CLI)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
-
-      - name: Publish (NativeAOT)
+      - name: Publish
         shell: bash
         run: scripts/publish.sh "${{ matrix.rid }}" "$VERSION" "dist/$NAME"
 
